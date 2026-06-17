@@ -229,8 +229,8 @@ export default function ProfitabilityTab({ onSelectClient }) {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="quarter" tick={{ fill: C.muted, fontSize: 11 }} axisLine={{ stroke: C.border }} />
-                <YAxis tickFormatter={v => \`₹\${fmt(v)}\`} tick={{ fill: C.muted, fontSize: 10 }} axisLine={{ stroke: C.border }} width={72} />
-                <Tooltip formatter={v => \`₹\${fmt(v)}\`} contentStyle={tooltipStyle} />
+                <YAxis tickFormatter={v => `₹${fmt(v)}`} tick={{ fill: C.muted, fontSize: 10 }} axisLine={{ stroke: C.border }} width={72} />
+                <Tooltip formatter={v => `₹${fmt(v)}`} contentStyle={tooltipStyle} />
                 <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
                 <Area type="monotone" dataKey="sell_rate" stroke={C.accent} fill="url(#colorMargin)" name="Sell Rate" strokeWidth={2} />
                 <Line type="monotone" dataKey="buy_rate" stroke={C.muted} strokeDasharray="4 2" name="Buy Rate" strokeWidth={1.5} dot={false} />
@@ -239,11 +239,11 @@ export default function ProfitabilityTab({ onSelectClient }) {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginTop: 20 }}>
               {[
-                { label: "Avg Sell Rate", val: \`₹\${fmt(avgSell)}\` },
-                { label: "Avg Buy Rate", val: \`₹\${fmt(avgBuy)}\` },
-                { label: "Avg Margin", val: \`\${avgMargin.toFixed(1)}%\` },
+                { label: "Avg Sell Rate", val: `₹${fmt(avgSell)}` },
+                { label: "Avg Buy Rate", val: `₹${fmt(avgBuy)}` },
+                { label: "Avg Margin", val: `${avgMargin.toFixed(1)}%` },
               ].map(s => (
-                <div key={s.label} style={{ background: C.surface, border: \`1px solid \${C.border}\`, borderRadius: 8, padding: 14 }}>
+                <div key={s.label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14 }}>
                   <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>{s.label}</div>
                   <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 15, color: C.text }}>{s.val}</div>
                 </div>
@@ -251,11 +251,11 @@ export default function ProfitabilityTab({ onSelectClient }) {
             </div>
 
             {marginDiff < 0 ? (
-              <div style={{ marginTop: 16, background: "#3a1a1a", border: \`1px solid \${C.red}\`, color: C.red, padding: "12px 16px", borderRadius: 8, fontSize: 13 }}>
+              <div style={{ marginTop: 16, background: "#3a1a1a", border: `1px solid ${C.red}`, color: C.red, padding: "12px 16px", borderRadius: 8, fontSize: 13 }}>
                 ⚠ <strong>Margin compression detected</strong> — {selectedClientName} margin has declined {Math.abs(marginDiff).toFixed(1)}pp since {clientRates[0].quarter}.
               </div>
             ) : (
-              <div style={{ marginTop: 16, background: "#1a3a2a", border: \`1px solid \${C.green}\`, color: C.green, padding: "12px 16px", borderRadius: 8, fontSize: 13 }}>
+              <div style={{ marginTop: 16, background: "#1a3a2a", border: `1px solid ${C.green}`, color: C.green, padding: "12px 16px", borderRadius: 8, fontSize: 13 }}>
                 ✓ <strong>Margin stable/improving</strong> — {selectedClientName} margin has improved by {Math.abs(marginDiff).toFixed(1)}pp since {clientRates[0].quarter}.
               </div>
             )}
@@ -264,19 +264,19 @@ export default function ProfitabilityTab({ onSelectClient }) {
       </section>
 
       {/* SECTION 3 — CARRIER BENCHMARKING */}
-      <section style={{ background: C.card, borderRadius: 10, border: \`1px solid \${C.border}\`, padding: 24 }}>
+      <section style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 24 }}>
         <h3 style={{ fontSize: 14, color: C.text, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 20 }}>Carrier Benchmarking</h3>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: C.surface }}>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Carrier</th>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Mode</th>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Jobs</th>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Avg Buy Rate</th>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Avg Sell Rate</th>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Freight Margin %</th>
-                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Unrecovered Costs</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Carrier</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Mode</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Jobs</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Avg Buy Rate</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Avg Sell Rate</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Freight Margin %</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Unrecovered Costs</th>
               </tr>
             </thead>
             <tbody>
@@ -286,7 +286,7 @@ export default function ProfitabilityTab({ onSelectClient }) {
                 else if (c.margin_pct >= 15) marginColor = C.yellow;
 
                 return (
-                  <tr key={c.carrier_id} style={{ borderBottom: \`1px solid \${C.border}50\` }}>
+                  <tr key={c.carrier_id} style={{ borderBottom: `1px solid ${C.border}50` }}>
                     <td style={{ padding: "11px 14px", color: C.text, fontWeight: 500 }}>{c.name}</td>
                     <td style={{ padding: "11px 14px", color: C.muted }}>{c.mode}</td>
                     <td style={{ padding: "11px 14px", color: C.text }}>{c.jobs_count}</td>
@@ -294,7 +294,7 @@ export default function ProfitabilityTab({ onSelectClient }) {
                     <td style={{ padding: "11px 14px", fontFamily: "'Space Mono', monospace", color: C.text }}>₹{fmt(c.avg_sell)}</td>
                     <td style={{ padding: "11px 14px", fontFamily: "'Space Mono', monospace", color: marginColor }}>{c.margin_pct.toFixed(1)}%</td>
                     <td style={{ padding: "11px 14px", fontFamily: "'Space Mono', monospace", color: c.total_unrecovered > 0 ? C.red : C.muted }} title={c.total_unrecovered > 0 ? "This cost was absorbed by CFF — not billed to customer." : ""}>
-                      {c.total_unrecovered > 0 ? \`₹\${fmt(c.total_unrecovered)}\` : "—"}
+                      {c.total_unrecovered > 0 ? `₹${fmt(c.total_unrecovered)}` : "—"}
                     </td>
                   </tr>
                 );
@@ -310,16 +310,16 @@ export default function ProfitabilityTab({ onSelectClient }) {
       </section>
 
       {/* SECTION 4 — COST LEAKAGE SUMMARY */}
-      <section style={{ background: C.card, borderRadius: 10, border: \`1px solid \${C.border}\`, padding: 24 }}>
+      <section style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 24 }}>
         <h3 style={{ fontSize: 14, color: C.text, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 20 }}>Cost Leakage Summary</h3>
         
         <div style={{ height: 200, marginBottom: 32 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart layout="vertical" data={leakageByType} margin={{ top: 0, right: 50, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={true} vertical={false} />
-              <XAxis type="number" tickFormatter={v => \`₹\${fmt(v)}\`} tick={{ fill: C.muted, fontSize: 11 }} axisLine={{ stroke: C.border }} />
+              <XAxis type="number" tickFormatter={v => `₹${fmt(v)}`} tick={{ fill: C.muted, fontSize: 11 }} axisLine={{ stroke: C.border }} />
               <YAxis dataKey="cost_type" type="category" tick={{ fill: C.text, fontSize: 12 }} axisLine={{ stroke: C.border }} width={120} />
-              <Tooltip formatter={v => \`₹\${fmt(v)}\`} contentStyle={tooltipStyle} />
+              <Tooltip formatter={v => `₹${fmt(v)}`} contentStyle={tooltipStyle} />
               <Bar dataKey="unrecovered" fill={C.red} fillOpacity={0.8} radius={[0, 4, 4, 0]}>
                 {/* Note: In a full impl we'd use LabelList here, but omitting for brevity if recharts doesn't auto-support without it */}
               </Bar>
@@ -335,15 +335,15 @@ export default function ProfitabilityTab({ onSelectClient }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: C.surface }}>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Client</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Total Unrecovered</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Jobs Affected</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Avg per Job</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Client</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Total Unrecovered</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Jobs Affected</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Avg per Job</th>
                   </tr>
                 </thead>
                 <tbody>
                   {leakageByClient.map(lbc => (
-                    <tr key={lbc.client_id} style={{ borderBottom: \`1px solid \${C.border}40\` }}>
+                    <tr key={lbc.client_id} style={{ borderBottom: `1px solid ${C.border}40` }}>
                       <td style={{ padding: "8px 12px" }}>
                         <ClientLink id={lbc.client_id} openScorecard={onSelectClient} />
                       </td>
@@ -364,14 +364,14 @@ export default function ProfitabilityTab({ onSelectClient }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: C.surface }}>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Carrier</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Total Unrecovered</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: \`1px solid \${C.border}\` }}>Jobs Affected</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Carrier</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Total Unrecovered</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, borderBottom: `1px solid ${C.border}` }}>Jobs Affected</th>
                   </tr>
                 </thead>
                 <tbody>
                   {leakageByCarrier.map(lbc => (
-                    <tr key={lbc.carrier_id} style={{ borderBottom: \`1px solid \${C.border}40\` }}>
+                    <tr key={lbc.carrier_id} style={{ borderBottom: `1px solid ${C.border}40` }}>
                       <td style={{ padding: "8px 12px", color: C.text }}>{lbc.name}</td>
                       <td style={{ padding: "8px 12px", fontFamily: "'Space Mono', monospace", color: C.red }}>₹{fmt(lbc.unrecovered)}</td>
                       <td style={{ padding: "8px 12px", color: C.text }}>{lbc.job_count}</td>
@@ -383,7 +383,7 @@ export default function ProfitabilityTab({ onSelectClient }) {
           </div>
         </div>
 
-        <div style={{ background: C.accentDim, border: \`1px solid \${C.accent}\`, padding: 24, borderRadius: 8, textAlign: "center" }}>
+        <div style={{ background: C.accentDim, border: `1px solid ${C.accent}`, padding: 24, borderRadius: 8, textAlign: "center" }}>
           <div style={{ fontSize: 14, color: C.text, marginBottom: 12 }}>Total unrecovered costs across all completed jobs:</div>
           <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 32, fontWeight: 700, color: C.red, marginBottom: 16 }}>₹{fmt(totalLeakage)}</div>
           <div style={{ fontSize: 13, color: C.text, lineHeight: "1.6" }}>

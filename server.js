@@ -31,7 +31,7 @@ app.post('/api/claude', async (req, res) => {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: req.body.model || 'claude-3-5-sonnet-20241022',
+        model: req.body.model || 'claude-sonnet-4-6',
         max_tokens: Math.min(req.body.max_tokens || 1024, 4096),
         system: req.body.system || 'You are a helpful assistant.',
         messages: req.body.messages || []

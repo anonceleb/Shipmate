@@ -150,8 +150,7 @@ export const CITY_COORDS = {
   "Dubai": [55.30, 25.20], "Basel": [7.59, 47.56],
 };
 
-// ── COLOUR SYSTEM ──────────────────────────────────────────────────────────────
-export const C = {
+export const DARK_THEME = {
   bg: "#0B0F1A",
   surface: "#111827",
   card: "#161D2E",
@@ -163,6 +162,27 @@ export const C = {
   green: "#2ECC71",
   yellow: "#F39C12",
   red: "#E74C3C",
+};
+
+export const LIGHT_THEME = {
+  bg: "#F9FAFB",
+  surface: "#F3F4F6",
+  card: "#FFFFFF",
+  border: "#E5E7EB",
+  accent: "#D97706",
+  accentDim: "#FEF3C7",
+  text: "#111827",
+  muted: "#6B7280",
+  green: "#10B981",
+  yellow: "#F59E0B",
+  red: "#EF4444",
+};
+
+export let C = { ...DARK_THEME };
+
+export const applyTheme = (isLight) => {
+  const theme = isLight ? LIGHT_THEME : DARK_THEME;
+  Object.assign(C, theme);
 };
 
 // CBIC drawback rates by HS chapter (simplified)

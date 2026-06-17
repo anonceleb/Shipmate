@@ -58,3 +58,13 @@ To maintain a demo-friendly persistence without a database, it uses browser `loc
 - Migrate mock data to a real database (e.g., PostgreSQL).
 - Move complex aggregations from the frontend (`src/utils/computations.js`) to the backend.
 - Replace inline styles with a more robust CSS framework or module system.
+
+## Sattva CFS Intelligence Architecture (`src/cfs/`)
+The CFS workspace operates as an overlay prototype on top of a Container Freight Station yard and billing system.
+
+### Dynamic Calculations & Terminal Toggling
+- **Stateful Switching**: Toggling between **STV** (Sattva Hi-Tech) and **BCT** (Balmer Lawrie) is handled dynamically in [CfsApp.jsx](file:///Users/ashwin/Streak/Shipmate/src/cfs/CfsApp.jsx).
+- **Data Partitioning**: The computations engine in [computations.js](file:///Users/ashwin/Streak/Shipmate/src/cfs/computations.js) exports a dynamic `getComputations(terminalAbbr)` function. It partitions the synthetic `CONTAINERS` dataset (even indices for `STV` and odd indices for `BCT`) to filter each terminal's active and history metrics.
+- **Dynamic Aggregations**: Dues, aging, leakage reconciliation, and profitability metrics are recalculated on the selected terminal's partition.
+- **AI Query Syncing**: The prompt compiler `buildSystem()` inside the component injects the terminal-specific `LEDGER` context dynamically so that the natural language analytics engine analyzes the correct dataset based on the active terminal.
+

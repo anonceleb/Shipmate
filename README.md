@@ -1,16 +1,179 @@
-# React + Vite
+# CFF Analytics Intelligence
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**AI-powered logistics, customs, and profitability analytics dashboard** for Combined Freight Forwarders (CFF) — a Chennai-based freight forwarding and customs brokerage company.
 
-Currently, two official plugins are available:
+This interactive prototype lets operations, compliance, and commercial teams explore shipment data, recover duty drawbacks, stress-test quotes, and ask complex questions in natural language.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+> **Two demo workspaces.** The app opens with a workspace picker:
+> 1. **CFF Analytics Intelligence** — the freight-forwarder demo described below.
+> 2. **Sattva CFS Intelligence** (`src/cfs/`) — a separate module targeted at Sattva Hi-Tech & Conware's "Balaji Container Terminal" CFS (Manali, Chennai). Positioned as an *overlay on their existing yard & billing systems*: tariff reconciliation & revenue-leakage recovery, dwell/ground-rent tracking, Section 48 long-stay/auction track, activity-based per-container profitability, throughput analytics, and an AI query tab. Every insight tab ends in an executable artifact (debit notes, demand notices, auction dockets, repricing memos — printable, logged to a persistent action register). Tariff figures are transcribed from Sattva's published tariff sheets (effective 15-06-2023 + current revision); all container/billing/cost data is synthetic.
 
-## React Compiler
+## Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 🤖 AI Query Interface (`query` tab)
+Ask anything about clients, margins, lanes, compliance, or customs activity.  
+The app injects relevant slices of the live dataset plus the complete schema into a carefully engineered prompt. Claude 3.5 Sonnet returns a structured response containing:
+- Equivalent SQL
+- Plain-English summary with numbers
+- Relevant data table (3–8 rows)
+- Actionable business insight or recommendation
 
-## Expanding the ESLint configuration
+Includes a set of curated sample questions for instant exploration.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### 🔍 Job Exploration (`explore` tab)
+Filterable, sortable table of 40+ jobs across Ocean FCL/LCL, Air, and Project Cargo.  
+- Multi-dimensional filters (client, mode, trade lane, status)
+- In-progress tracker with days-elapsed calculation
+- Clickable client names that open rich scorecards
+
+### 📋 Operations & Duty Drawback (`operations` tab)
+- Automatically identifies unclaimed duty drawback opportunities from paired import/export filings using HS-chapter rates.
+- Draft claims with live 18% CFF fee calculation.
+- One-click "filing" (simulated) that generates ICEGATE-style references and persists to localStorage.
+- Pre-filing compliance checker: historical amendment/examination patterns + estimated hours & cost savings.
+- Export the full filing register to CSV.
+
+### 💰 Quote Assist & Pipeline (`quoteassist` tab)
+Historical quoting intelligence by transport mode + commodity type:
+- Floor / median / ceiling actual costs
+- Win-rate analysis at different pricing thresholds
+- Draft quotes and save them to an in-app pipeline
+- One-click CSV export of the entire pipeline
+
+### 📈 Profitability & Visual Analytics (`profitability` + `charts` tabs)
+- Client compliance risk scoring (weighted examination + amendment rates)
+- Warehouse utilization and cost-per-CBM metrics
+- Recharts-driven monthly revenue/cost/margin trends and mode breakdowns
+- Interactive SVG trade-lane map with great-circle-style arcs
+
+## Tech Stack
+
+| Layer       | Technology                                      |
+|-------------|-------------------------------------------------|
+| Frontend    | React 19, Vite 8, Recharts, custom dark theme   |
+| Backend     | Node.js + Express 5 (lightweight AI proxy only) |
+| AI          | Anthropic Claude 3.5 Sonnet (`claude-3-5-sonnet-20241022`) |
+| Data        | 100% synthetic mock dataset (no external DB)    |
+| Persistence | Browser localStorage (`cff_claims`, `cff_filing_register`) |
+| Styling     | CSS variables + inline styles + Space Mono accents |
+
+## Getting Started
+
+### Prerequisites
+- Node.js ≥ 18
+- npm
+- Anthropic API key (required for AI features)
+
+### Installation
+
+```bash
+npm install
+```
+
+### Environment Variables
+
+Create a `.env` file in the project root (already ignored by Git):
+
+```env
+ANTHROPIC_API_KEY=sk-ant-api03-...
+# Optional
+PORT=3001
+FRONTEND_URL=http://localhost:5173
+```
+
+### Running the App
+
+You must run **both** the backend proxy and the frontend dev server.
+
+**Terminal 1 – Backend (AI Proxy)**
+```bash
+node server.js
+```
+The server starts on port 3001 with rate limiting and CORS.
+
+**Terminal 2 – Frontend**
+```bash
+npm run dev
+```
+Vite serves the app on http://localhost:5173 and automatically proxies `/api/*` calls to the backend.
+
+## Project Structure
+
+```
+.
+├── src/
+│   ├── App.jsx                 # Central controller, all tab logic, AI query handler
+│   ├── main.jsx                # React entry point
+│   ├── components/
+│   │   ├── ChartsTab.jsx
+│   │   ├── ProfitabilityTab.jsx
+│   │   ├── ScorecardModal.jsx
+│   │   ├── TradeLaneMap.jsx
+│   │   └── ClientLink.jsx
+│   ├── cfs/                    # Sattva CFS Intelligence Module
+│   │   ├── CfsApp.jsx          # Main controller and view engine for CFS workspace
+│   │   ├── computations.js     # Dynamic metrics, yard rent, aggregates, and data partitioning
+│   │   └── constants.js        # CFS static tariff lists, synthetic containers, and schemas
+│   ├── data/
+│   │   └── constants.js        # Full mock dataset + Claude schema prompt + color system
+│   ├── utils/
+│   │   └── computations.js     # Risk scoring, aggregates, formatters, map math
+│   └── *.css
+├── server.js                   # Express proxy to Anthropic (only place the API key is used)
+├── vite.config.js              # React plugin + dev proxy for /api
+├── package.json
+├── ENGINEERING.md              # Detailed feature & architecture notes
+├── update.cjs                  # Legacy one-time code-migration script (historical)
+└── public/
+```
+
+## How the AI Integration Works
+
+1. User types a question (or picks a sample).
+2. Frontend (`App.jsx`) heuristically selects which tables are relevant based on keywords.
+3. It assembles a rich system prompt: `SCHEMA_DESC` (full relational description) + selected JSON data + strict output contract.
+4. POSTs to `/api/claude` (proxied by Vite during dev).
+5. `server.js` forwards the request to Anthropic using `ANTHROPIC_API_KEY` from the environment.
+6. Response is parsed for the first text block, cleaned of markdown fences, and rendered.
+
+The key never touches the browser.
+
+## Data Model Highlights
+
+See `src/data/constants.js` for the complete values.
+
+**Primary entities**:
+- `CLIENTS` (8 Indian companies)
+- `JOBS` (40+ shipments with revenue, cost, mode, lane, status, service scope)
+- `CUSTOMS_FILINGS` (Shipping Bills & Bills of Entry, HS codes, CIF, examinations, amendments)
+- `DRAWBACK_CLAIMS`, `QUOTES` (won/lost history), `WAREHOUSE`, `CARRIERS`, `JOB_COST_LINES`, `RATE_HISTORY`, `BASELINE_METRICS`
+
+All amounts in INR. HS chapters and drawback rates are simplified but realistic.
+
+## Scripts
+
+| Command         | Description                              |
+|-----------------|------------------------------------------|
+| `npm run dev`   | Start Vite dev server (with HMR)         |
+| `npm run build` | Build production bundle to `dist/`       |
+| `npm run lint`  | Run ESLint                               |
+| `npm run preview`| Preview production build locally        |
+| `node server.js`| Start the required AI proxy backend      |
+
+## Notes & Limitations
+
+- **Demo / internal tool** — 100% synthetic data.
+- AI answers are non-deterministic and only as good as the injected context.
+- No authentication, real database, or production-grade backend.
+- Claim and pipeline state live only in your browser’s localStorage (clears on hard reset or different browser).
+- `update.cjs` is a historical patch script and is no longer used.
+
+For deeper technical context and future roadmap items (real database, server-side aggregations, CSS modules, etc.), read [ENGINEERING.md](./ENGINEERING.md).
+
+## License
+
+Internal / proprietary project. All rights reserved.
+
+---
+
+Built with React 19 + Vite + Claude.

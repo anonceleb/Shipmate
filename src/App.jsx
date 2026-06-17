@@ -5,16 +5,31 @@ import ScorecardModal from "./components/ScorecardModal.jsx";
 import ChartsTab from "./components/ChartsTab.jsx";
 import ClientLink from "./components/ClientLink.jsx";
 import ProfitabilityTab from "./components/ProfitabilityTab.jsx";
-import { CLIENTS, JOBS, CUSTOMS_FILINGS, WAREHOUSE, SCHEMA_DESC, C, DRAWBACK_RATES, DRAWBACK_CLAIMS, BASELINE_METRICS, QUOTES, SAMPLE_QUESTIONS } from "./data/constants.js";
+import { CLIENTS, JOBS, CUSTOMS_FILINGS, WAREHOUSE, SCHEMA_DESC, C, applyTheme, DRAWBACK_RATES, DRAWBACK_CLAIMS, BASELINE_METRICS, QUOTES, SAMPLE_QUESTIONS } from "./data/constants.js";
 import { JOB_CLIENT_MAP, COMPLIANCE_RISK, WAREHOUSE_STATS, fmt, pct } from "./utils/computations.js";
+import { useClaudeQuery } from "./core/query.js";
+import { LifecycleShell } from "./core/LifecycleShell.jsx";
 
 
 
-export default function App() {
-  const [question, setQuestion] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [activeTab, setActiveTab] = useState("query");
+export default function App({ onSwitch }) {
+  const [isLightMode, setIsLightMode] = useState(false);
+  applyTheme(isLightMode);
+
+  const [activeTab, setActiveTab] = useState("intelligence");
+
+  const CFF_STAGES = [
+    { id: "quote",   label: "Quote",   hint: "price the job — quoting intelligence" },
+    { id: "book",    label: "Book",    hint: "open the job — explore & track" },
+    { id: "operate", label: "Operate", hint: "compliance check & pre-filing" },
+    { id: "bill",    label: "Bill",    hint: "job billing — not yet built", gap: true },
+    { id: "recover", label: "Recover", hint: "duty drawback & filing register" },
+    { id: "settle",  label: "Settle",  hint: "collect payment — not yet built", gap: true },
+  ];
+  const CFF_RAILS = [
+    { id: "intelligence",  label: "Intelligence" },
+    { id: "profitability", label: "Profitability" },
+  ];
 
   const [filterClient, setFilterClient] = useState("All");
   const [filterMode, setFilterMode] = useState("All");
@@ -57,6 +72,29 @@ export default function App() {
   const uniqueCommodities = useMemo(() => {
     return [...new Set(QUOTES.map(q => q.commodity_type))].sort();
   }, []);
+
+  const buildCffSystem = (qText) => {
+    const qLower = qText.toLowerCase();
+    let dataContext = "\nDATA:\n";
+    if (qLower.includes("client") || qLower.includes("industry")) dataContext += `CLIENTS: ${JSON.stringify(CLIENTS)}\n`;
+    if (qLower.match(/job|margin|revenue|cost|profit|lane|mode/)) dataContext += `JOBS: ${JSON.stringify(JOBS)}\n`;
+    if (qLower.match(/customs|filing|amend|duty|hs|exam/)) dataContext += `CUSTOMS_FILINGS: ${JSON.stringify(CUSTOMS_FILINGS)}\n`;
+    if (qLower.match(/warehouse|cbm|storage/)) dataContext += `WAREHOUSE: ${JSON.stringify(WAREHOUSE)}\n`;
+    if (dataContext === "\nDATA:\n") dataContext += `CLIENTS: ${JSON.stringify(CLIENTS)}\nJOBS: ${JSON.stringify(JOBS)}\n`;
+    return SCHEMA_DESC + dataContext + `
+Respond ONLY with a valid JSON object, no markdown, no explanation. Format:
+{
+  "sql": "SELECT ... -- the SQL query that would answer this",
+  "summary": "1-2 sentence plain English answer with specific numbers",
+  "table": [{"col1": val, "col2": val, ...}],
+  "insight": "1 sentence business insight or recommendation"
+}
+The table should have 3-8 rows maximum, with the most relevant data.
+Column names should be human-readable (e.g., "Client Name" not "client_id").
+Use INR formatting for monetary values (include ₹ symbol).`;
+  };
+
+  const { question, setQuestion, loading, result, handleQuery } = useClaudeQuery(buildCffSystem, 1000);
 
   const runQuoteAssist = () => {
     if (!quoteMode || !quoteCommodity) return;
@@ -180,67 +218,6 @@ export default function App() {
   const handleSort = (col) => {
     if (sortCol === col) setSortAsc(!sortAsc);
     else { setSortCol(col); setSortAsc(true); }
-  };
-
-  const handleQuery = async (q) => {
-    const qText = q || question;
-    if (!qText.trim()) return;
-    setLoading(true);
-    setResult(null);
-
-    // Determine relevant data slices based on query
-    const qLower = qText.toLowerCase();
-    let dataContext = "\\nDATA:\\n";
-    if (qLower.includes("client") || qLower.includes("industry")) dataContext += `CLIENTS: ${JSON.stringify(CLIENTS)}\\n`;
-    if (qLower.match(/job|margin|revenue|cost|profit|lane|mode/)) dataContext += `JOBS: ${JSON.stringify(JOBS)}\\n`;
-    if (qLower.match(/customs|filing|amend|duty|hs|exam/)) dataContext += `CUSTOMS_FILINGS: ${JSON.stringify(CUSTOMS_FILINGS)}\\n`;
-    if (qLower.match(/warehouse|cbm|storage/)) dataContext += `WAREHOUSE: ${JSON.stringify(WAREHOUSE)}\\n`;
-    
-    // Fallback: if no specific keywords matched, provide jobs and clients
-    if (dataContext === "\\nDATA:\\n") {
-      dataContext += `CLIENTS: ${JSON.stringify(CLIENTS)}\\nJOBS: ${JSON.stringify(JOBS)}\\n`;
-    }
-
-    try {
-      const res = await fetch("/api/claude", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-sonnet-20241022",
-          max_tokens: 1000,
-          system: SCHEMA_DESC + dataContext + `
-Respond ONLY with a valid JSON object, no markdown, no explanation. Format:
-{
-  "sql": "SELECT ... -- the SQL query that would answer this",
-  "summary": "1-2 sentence plain English answer with specific numbers",
-  "table": [{"col1": val, "col2": val, ...}],
-  "insight": "1 sentence business insight or recommendation"
-}
-The table should have 3-8 rows maximum, with the most relevant data.
-Column names should be human-readable (e.g., "Client Name" not "client_id").
-Use INR formatting for monetary values (include ₹ symbol).`,
-          messages: [{ role: "user", content: qText }],
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error?.message || "Failed to fetch response");
-      }
-      const raw = data.content?.find(b => b.type === "text")?.text || "{}";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      let parsed;
-      try {
-        parsed = JSON.parse(clean);
-      } catch (err) {
-        throw new Error("Claude returned malformed JSON: " + err.message);
-      }
-      setResult({ question: qText, ...parsed });
-    } catch (e) {
-      setResult({ question: qText, sql: "", summary: `Error processing query. ${e.message}`, table: [], insight: "" });
-    }
-    setLoading(false);
   };
 
   const handleSample = (q) => {
@@ -369,47 +346,36 @@ Use INR formatting for monetary values (include ₹ symbol).`,
         </div>
       )}
 
-      {/* HEADER */}
-      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "20px 32px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ width: 36, height: 36, background: C.accent, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ color: "#000", fontFamily: "'Space Mono', monospace", fontWeight: 700, fontSize: 14 }}>CFF</span>
-          </div>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.2px" }}>CFF Analytics Intelligence</div>
-            <div style={{ fontSize: 12, color: C.muted, fontFamily: "'Space Mono', monospace" }}>DEMO · MOCK DATA · 2024–2025</div>
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {["query", "explore", "operations", "quoteassist", "profitability", "charts", "schema"].map(t => (
-            <button key={t} onClick={() => setActiveTab(t)}
-              style={{ padding: "6px 16px", borderRadius: 6, border: `1px solid ${activeTab === t ? C.accent : C.border}`,
-                background: activeTab === t ? C.accentDim : "transparent",
-                color: activeTab === t ? C.accent : C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* STAT BAR */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, background: C.border }}>
-        {[
+      <LifecycleShell
+        brand={{ abbr: "CFF", name: "CFF Analytics Intelligence", subtitle: "DEMO · MOCK DATA · 2024–2025", color: C.accent }}
+        stages={CFF_STAGES}
+        rails={[...CFF_RAILS, { id: "schema", label: "Schema" }]}
+        active={activeTab}
+        onSelect={setActiveTab}
+        stats={[
           { label: "Total Jobs", value: completedJobs.length, sub: `+ ${JOBS.filter(j=>j.status==="In Progress").length} in progress` },
           { label: "Revenue (FY)", value: "₹" + fmt(totalRevenue), sub: pct(totalMargin, totalRevenue) + " margin" },
           { label: "Customs Filings", value: CUSTOMS_FILINGS.length, sub: `${examCount} examinations` },
           { label: "Amendment Rate", value: pct(amendCount, CUSTOMS_FILINGS.length), sub: `${amendCount} filings amended` },
-        ].map((s, i) => (
-          <div key={i} style={{ background: C.card, padding: "16px 24px" }}>
-            <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 6 }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 600, fontFamily: "'Space Mono', monospace", color: C.accent }}>{s.value}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{s.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ padding: "28px 32px", maxWidth: 1100, margin: "0 auto" }}>
-        {activeTab === "query" ? (
+        ]}
+        headerExtra={
+          onSwitch && (
+            <button onClick={onSwitch} style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+              ⇄ Switch demo
+            </button>
+          )
+        }
+        themeToggle={
+          <button
+            onClick={() => setIsLightMode(!isLightMode)}
+            title={isLightMode ? "Switch to dark mode" : "Switch to light mode"}
+            style={{ padding: "8px 14px", borderRadius: 20, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 13, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}
+          >
+            {isLightMode ? "🌙" : "☀️"}
+          </button>
+        }
+      >
+        {activeTab === "intelligence" && (
           <>
             {/* SAMPLE QUESTIONS */}
             <div style={{ marginBottom: 20 }}>
@@ -532,9 +498,38 @@ Use INR formatting for monetary values (include ₹ symbol).`,
               </div>
             )}
           </>
-        ) : activeTab === "profitability" ? (
-          <ProfitabilityTab onSelectClient={openScorecard} />
-        ) : activeTab === "explore" ? (
+        )}
+        {activeTab === "profitability" && (
+          <>
+            <ProfitabilityTab onSelectClient={openScorecard} />
+            <ChartsTab onSelectClient={openScorecard} />
+            <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 4, marginTop: 4 }}>
+              <div style={{ padding: "14px 16px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", borderBottom: `1px solid ${C.border}` }}>Warehouse Utilisation — CBM & storage cost by client</div>
+              {WAREHOUSE_STATS.map((w, i) => (
+                <div key={w.name} style={{ padding: "14px 16px", borderBottom: i < WAREHOUSE_STATS.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{w.name}</span>
+                      <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>{w.jobs} storage event{w.jobs !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 24, textAlign: "right" }}>
+                      {[["Total CBM", w.total_cbm, C.accent], ["Charges", `₹${fmt(w.total_charges)}`, C.text], ["₹/CBM", `₹${fmt(w.cost_per_cbm)}`, C.text]].map(([label, val, color]) => (
+                        <div key={label}>
+                          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</div>
+                          <div style={{ fontSize: 13, fontFamily: "'Space Mono',monospace", color }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ height: 6, background: C.border, borderRadius: 3 }}>
+                    <div style={{ height: "100%", width: `${w.pct}%`, background: `linear-gradient(90deg, ${C.accent}, ${C.accent}88)`, borderRadius: 3 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {activeTab === "book" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
             {/* In Progress Tracker */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
@@ -616,10 +611,9 @@ Use INR formatting for monetary values (include ₹ symbol).`,
               </div>
             </div>
           </div>
-        ) : activeTab === "charts" ? (
-          <ChartsTab onSelectClient={openScorecard} />
-        ) : activeTab === "operations" ? (
-          /* OPERATIONS TAB */
+        )}
+        {/* ── RECOVER — duty drawback + filing register ── */}
+        {activeTab === "recover" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
 
             {/* ── DUTY DRAWBACK ── */}
@@ -757,6 +751,11 @@ Use INR formatting for monetary values (include ₹ symbol).`,
               </section>
             )}
 
+          </div>
+        )}
+        {/* ── OPERATE — compliance check & pre-filing ── */}
+        {activeTab === "operate" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
             {/* ── AMENDMENT PREVENTION CHECK ── */}
             <section>
               <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12 }}>Amendment Prevention Check</div>
@@ -963,44 +962,10 @@ Use INR formatting for monetary values (include ₹ symbol).`,
               </div>
             </section>
 
-            {/* ── WAREHOUSE UTILISATION ── */}
-            <section>
-              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 4 }}>Warehouse Utilisation</div>
-              <div style={{ fontSize: 11, color: C.muted, marginBottom: 14 }}>CBM usage and storage cost efficiency by client</div>
-              <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 4 }}>
-                {WAREHOUSE_STATS.map((w, i) => (
-                  <div key={w.name} style={{ padding: "14px 16px", borderBottom: i < WAREHOUSE_STATS.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <div>
-                        <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{w.name}</span>
-                        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>{w.jobs} storage event{w.jobs !== 1 ? "s" : ""}</span>
-                      </div>
-                      <div style={{ display: "flex", gap: 24, textAlign: "right" }}>
-                        <div>
-                          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Total CBM</div>
-                          <div style={{ fontSize: 13, fontFamily: "'Space Mono',monospace", color: C.accent }}>{w.total_cbm}</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Charges</div>
-                          <div style={{ fontSize: 13, fontFamily: "'Space Mono',monospace", color: C.text }}>₹{fmt(w.total_charges)}</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.5px" }}>₹/CBM</div>
-                          <div style={{ fontSize: 13, fontFamily: "'Space Mono',monospace", color: C.text }}>₹{fmt(w.cost_per_cbm)}</div>
-                        </div>
-                      </div>
-                    </div>
-                    <div style={{ height: 6, background: C.border, borderRadius: 3 }}>
-                      <div style={{ height: "100%", width: `${w.pct}%`, background: `linear-gradient(90deg, ${C.accent}, ${C.accent}88)`, borderRadius: 3, transition: "width 0.4s" }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-
           </div>
-        ) : activeTab === "quoteassist" ? (
+        )}
+        {/* ── QUOTE — quoting intelligence ── */}
+        {activeTab === "quote" && (
           <div style={{ display: "flex", gap: 24 }}>
             {/* Left Panel: RFQ Input */}
             <div style={{ width: "40%", background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 24, alignSelf: "flex-start" }}>
@@ -1235,14 +1200,18 @@ Use INR formatting for monetary values (include ₹ symbol).`,
 
             </div>
           </div>
-        ) : (
-          /* SCHEMA TAB */
+        )}
+        {activeTab === "schema" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             {[
               { name: "CLIENTS", fields: ["client_id", "name", "industry", "country", "onboarded_year"], count: CLIENTS.length },
               { name: "JOBS", fields: ["job_id", "client_id", "mode", "origin", "destination", "trade_lane", "service", "job_date", "revenue ₹", "cost ₹", "status", "days_to_close"], count: JOBS.length },
               { name: "CUSTOMS_FILINGS", fields: ["filing_id", "job_id", "filing_type", "hs_code", "description", "cif_value ₹", "duty_amount ₹", "examination", "amendments", "days_to_clear"], count: CUSTOMS_FILINGS.length },
               { name: "WAREHOUSE", fields: ["record_id", "client_id", "commodity", "cbm", "entry_date", "exit_date", "charges ₹"], count: WAREHOUSE.length },
+              { name: "DRAWBACK_RATES", fields: ["hs_chapter", "description", "rate_pct"], count: DRAWBACK_RATES.length },
+              { name: "DRAWBACK_CLAIMS", fields: ["claim_id", "client_id", "import_filing", "export_filing", "hs_chapter", "eligible_amount ₹", "status", "identified_date"], count: DRAWBACK_CLAIMS.length },
+              { name: "BASELINE_METRICS", fields: ["client_id", "quarter", "amendment_count", "examination_count", "filings"], count: BASELINE_METRICS.length },
+              { name: "QUOTES", fields: ["quote_id", "client_id", "trade_lane", "origin", "destination", "mode", "commodity_type", "quoted_revenue ₹", "actual_cost ₹", "won"], count: QUOTES.length },
             ].map(tbl => (
               <div key={tbl.name} style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -1258,7 +1227,7 @@ Use INR formatting for monetary values (include ₹ symbol).`,
             ))}
           </div>
         )}
-      </div>
+      </LifecycleShell>
     </div>
   );
 }
