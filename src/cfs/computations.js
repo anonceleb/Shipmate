@@ -1,5 +1,5 @@
 // ── SATTVA CFS — TARIFF BILLING / COST / PROFITABILITY ENGINE ─────────────────
-import { TARIFF, CONTAINERS, INVOICE_ADJUSTMENTS, COST_DRIVERS, FACILITIES } from "./constants.js";
+import { TARIFF, TARIFF_LEGACY_HANDLING, STALE_RATE_CARD_IDS, CONTAINERS, INVOICE_ADJUSTMENTS, COST_DRIVERS, FACILITIES } from "./constants.js";
 
 export const fmt = n => new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n);
 export const TODAY = new Date().toISOString().slice(0, 10);
@@ -22,41 +22,46 @@ export function groundRent(days, size, holdingMult = 1) {
   return Math.round(total * holdingMult);
 }
 
-// Itemised expected billing per container, straight from the published tariff.
-export function computeBilling(c) {
+// Itemised billing per container.
+// T = effective tariff (current published rates + any UI overrides).
+// handlingRates overrides T.handling_import — used for stale-rate-card containers
+// so ancillaries still come from the current effective tariff while only handling
+// is re-priced at the legacy 2023 rates.
+export function computeBilling(c, handlingRates = null, T = TARIFF) {
+  const handling = handlingRates || T.handling_import;
   const s = sz(c), lines = [];
   const add = (label, amount) => { if (amount > 0) lines.push({ label, amount: Math.round(amount) }); };
 
   if (c.direction === "Export") {
-    add("Stuffing (yard, mechanical)", TARIFF.export.stuffing_yard_mech[s]);
-    add("Documentation", TARIFF.export.documentation);
-    add("RFID / Transecure / seal scanning", TARIFF.export.rfid_seal[s]);
-    if (c.weighment) add("Weighment", TARIFF.export.weighment);
+    add("Stuffing (yard, mechanical)", T.export.stuffing_yard_mech[s]);
+    add("Documentation", T.export.documentation);
+    add("RFID / Transecure / seal scanning", T.export.rfid_seal[s]);
+    if (c.weighment) add("Weighment", T.export.weighment);
     const days = dwellDays(c);
     let hold = 0;
-    for (const slab of TARIFF.export.holding) {
+    for (const slab of T.export.holding) {
       if (days < slab.from) break;
       hold += (Math.min(days, slab.to) - slab.from + 1) * slab[s];
     }
     add(`Holding (${days} days)`, hold);
   } else {
-    const rules = TARIFF.class_rules[c.cargo_class] || TARIFF.class_rules.GP;
+    const rules = T.class_rules[c.cargo_class] || T.class_rules.GP;
     const handlingClass = c.cargo_class === "ODC" ? "ODC" : "GP";
-    const base = TARIFF.handling_import[c.port][handlingClass].destuff[s];
+    const base = handling[c.port][handlingClass].destuff[s];
     add(`Handling & movement — ${c.port} (${c.cargo_class})`, base * rules.handling_mult);
-    if (c.examined) add("De-stuffing >25% for customs examination", TARIFF.exam_destuff[s]);
+    if (c.examined) add("De-stuffing >25% for customs examination", T.exam_destuff[s]);
     const days = dwellDays(c);
     add(`Ground rent (${days} days, ${c.cargo_class})`, groundRent(days, c.size, rules.holding_mult));
-    add("Energy surcharge", TARIFF.ancillary.energy_surcharge[s]);
-    if (c.weighment) add("Weighment", TARIFF.ancillary.weighment);
-    if (c.scanned) add("Scanning movement", TARIFF.ancillary.scanning_movement);
+    add("Energy surcharge", T.ancillary.energy_surcharge[s]);
+    if (c.weighment) add("Weighment", T.ancillary.weighment);
+    if (c.scanned) add("Scanning movement", T.ancillary.scanning_movement);
     if (c.cargo_class === "Reefer") {
       const plugDays = dayDiff(c.arrival_date, c.destuff_date || c.gate_out || TODAY);
-      add(`Reefer plugging & monitoring (${plugDays} days)`, TARIFF.ancillary.reefer_plugging[s] * plugDays);
+      add(`Reefer plugging & monitoring (${plugDays} days)`, T.ancillary.reefer_plugging[s] * plugDays);
     }
-    add("RFID container tracking", TARIFF.ancillary.rfid_per_teu * teu(c));
-    add("Risk management / insurance", TARIFF.ancillary.risk_mgmt_per_teu * teu(c));
-    add("Seal (OTL)", TARIFF.ancillary.seal_otl);
+    add("RFID container tracking", T.ancillary.rfid_per_teu * teu(c));
+    add("Risk management / insurance", T.ancillary.risk_mgmt_per_teu * teu(c));
+    add("Seal (OTL)", T.ancillary.seal_otl);
   }
   const total = lines.reduce((t, l) => t + l.amount, 0);
   return { lines, total };
@@ -100,16 +105,35 @@ export const DWELL_BUCKETS = [
 ];
 export const bucketOf = d => DWELL_BUCKETS.find(b => d >= b.min && d <= b.max);
 
-export function getComputations(terminalAbbr) {
+export function getComputations(terminalAbbr, rateOverrides = {}) {
+  const ET = buildEffectiveTariff(rateOverrides);   // effective tariff with UI overrides applied
+
   const terminalContainers = CONTAINERS.filter((c, idx) => {
     return terminalAbbr === "NXS" ? idx % 2 === 0 : idx % 2 !== 0;
   });
 
   const LEDGER = terminalContainers.map(c => {
-    const billing = computeBilling(c);
+    const billing = computeBilling(c, null, ET);                // current effective rates
     const cost = computeCost(c);
-    const adj = ADJ[c.container_id];
-    const invoiced = billing.total + (adj?.delta || 0);
+
+    let invoiced, invoiced_lines, leak_reason, stale_rate_card;
+    if (STALE_RATE_CARD_IDS.has(c.container_id)) {
+      // invoiced = recomputed using legacy 2023 handling rates + current ancillaries
+      const legacyBilling = computeBilling(c, TARIFF_LEGACY_HANDLING, ET);
+      invoiced        = legacyBilling.total;
+      invoiced_lines  = legacyBilling.lines;
+      stale_rate_card = true;
+      const expH = billing.lines.find(l => l.label.startsWith("Handling"));
+      const legH = legacyBilling.lines.find(l => l.label.startsWith("Handling"));
+      leak_reason = `Stale rate card — de-stuffing billed at 2023 rate (₹${fmt(legH.amount)}); current published rate ₹${fmt(expH.amount)}`;
+    } else {
+      const adj = ADJ[c.container_id];
+      invoiced        = billing.total + (adj?.delta || 0);
+      invoiced_lines  = null;
+      stale_rate_card = false;
+      leak_reason     = adj?.reason || null;
+    }
+
     return {
       ...c,
       teu: teu(c),
@@ -118,8 +142,10 @@ export function getComputations(terminalAbbr) {
       expected: billing.total,
       billing_lines: billing.lines,
       invoiced,
+      invoiced_lines,
+      stale_rate_card,
       variance: invoiced - billing.total,         // negative = leakage
-      leak_reason: adj?.reason || null,
+      leak_reason,
       cost: cost.total,
       cost_lines: cost.lines,
       margin: invoiced - cost.total,
@@ -207,3 +233,52 @@ export function getComputations(terminalAbbr) {
 }
 
 export const MANALI_CAPACITY = FACILITIES[0].annual_teu_capacity;
+
+// Maps rate card UI keys (from CfsApp rateOverrides) to paths in TARIFF.
+const OVERRIDE_PATHS = {
+  ch_gp_lo_20:  ["handling_import", "Chennai",    "GP",  "loadout", "s20"],
+  ch_gp_lo_40:  ["handling_import", "Chennai",    "GP",  "loadout", "s40"],
+  ch_gp_ds_20:  ["handling_import", "Chennai",    "GP",  "destuff", "s20"],
+  ch_gp_ds_40:  ["handling_import", "Chennai",    "GP",  "destuff", "s40"],
+  ch_od_lo_20:  ["handling_import", "Chennai",    "ODC", "loadout", "s20"],
+  ch_od_lo_40:  ["handling_import", "Chennai",    "ODC", "loadout", "s40"],
+  ch_od_ds_20:  ["handling_import", "Chennai",    "ODC", "destuff", "s20"],
+  ch_od_ds_40:  ["handling_import", "Chennai",    "ODC", "destuff", "s40"],
+  en_gp_lo_20:  ["handling_import", "Ennore",     "GP",  "loadout", "s20"],
+  en_gp_lo_40:  ["handling_import", "Ennore",     "GP",  "loadout", "s40"],
+  en_gp_ds_20:  ["handling_import", "Ennore",     "GP",  "destuff", "s20"],
+  en_gp_ds_40:  ["handling_import", "Ennore",     "GP",  "destuff", "s40"],
+  kt_gp_lo_20:  ["handling_import", "Kattupalli", "GP",  "loadout", "s20"],
+  kt_gp_lo_40:  ["handling_import", "Kattupalli", "GP",  "loadout", "s40"],
+  kt_gp_ds_20:  ["handling_import", "Kattupalli", "GP",  "destuff", "s20"],
+  kt_gp_ds_40:  ["handling_import", "Kattupalli", "GP",  "destuff", "s40"],
+  exam_s20:     ["exam_destuff", "s20"],
+  exam_s40:     ["exam_destuff", "s40"],
+  anc_en_20:    ["ancillary", "energy_surcharge",  "s20"],
+  anc_en_40:    ["ancillary", "energy_surcharge",  "s40"],
+  anc_rp_20:    ["ancillary", "reefer_plugging",   "s20"],
+  anc_rp_40:    ["ancillary", "reefer_plugging",   "s40"],
+  anc_ll_20:    ["ancillary", "lift_onoff_laden",  "s20"],
+  anc_ll_40:    ["ancillary", "lift_onoff_laden",  "s40"],
+  anc_rfid:     ["ancillary", "rfid_per_teu"],
+  anc_risk:     ["ancillary", "risk_mgmt_per_teu"],
+  anc_wt:       ["ancillary", "weighment"],
+  anc_scan:     ["ancillary", "scanning_movement"],
+  anc_seal:     ["ancillary", "seal_otl"],
+  anc_auc:      ["auction",   "handling_per_box"],
+  anc_noc:      ["auction",   "valuation_noc"],
+};
+
+// Returns a TARIFF clone with any rate card UI overrides applied.
+export function buildEffectiveTariff(overrides = {}) {
+  if (!overrides || Object.keys(overrides).length === 0) return TARIFF;
+  const t = JSON.parse(JSON.stringify(TARIFF));
+  for (const [key, val] of Object.entries(overrides)) {
+    const path = OVERRIDE_PATHS[key];
+    if (!path) continue;
+    let node = t;
+    for (let i = 0; i < path.length - 1; i++) node = node[path[i]];
+    node[path[path.length - 1]] = val;
+  }
+  return t;
+}

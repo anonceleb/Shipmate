@@ -53,15 +53,70 @@ export default function CfsApp({ onSwitch }) {
   const [termIdx, setTermIdx] = useState(0);
   const terminal = TERMINALS[termIdx];
 
+  // ── Rate card overrides (persisted per terminal) — must be before getComputations ──
+  const [allRateOverrides, setAllRateOverrides] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("shipmate_rate_overrides") || "{}"); }
+    catch { return {}; }
+  });
+  const rateOverrides = allRateOverrides[terminal.abbr] || {};
+
   const {
     LEDGER, LEAKS, TOTAL_LEAKAGE, YARD, YARD_ACCRUED, LONG_STAY,
     BY_CONSIGNEE, BY_CHA, BY_CLASS, BY_PORT, SLOT_ECONOMICS, MONTHLY_THROUGHPUT,
     TOTALS,
-  } = getComputations(terminal.abbr);
+  } = getComputations(terminal.abbr, rateOverrides);
 
   const [stage, setStage] = useState("recover");
   const [toast, setToast] = useState(null);
   const [detail, setDetail] = useState(null);
+  const setRateOverride = (key, val) => {
+    const next = { ...allRateOverrides, [terminal.abbr]: { ...rateOverrides, [key]: val } };
+    setAllRateOverrides(next);
+    localStorage.setItem("shipmate_rate_overrides", JSON.stringify(next));
+  };
+  const resetRateOverrides = () => {
+    const next = { ...allRateOverrides, [terminal.abbr]: {} };
+    setAllRateOverrides(next);
+    localStorage.setItem("shipmate_rate_overrides", JSON.stringify(next));
+  };
+
+  const [allRateEffDates, setAllRateEffDates] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("shipmate_rate_eff_dates") || "{}"); }
+    catch { return {}; }
+  });
+  const rateEffDate = allRateEffDates[terminal.abbr] || "2024-06-01";
+  const setRateEffDate = val => {
+    const next = { ...allRateEffDates, [terminal.abbr]: val };
+    setAllRateEffDates(next);
+    localStorage.setItem("shipmate_rate_eff_dates", JSON.stringify(next));
+  };
+
+  const [editingCell, setEditingCell] = useState(null);
+  const [editingVal, setEditingVal] = useState("");
+
+  const rc = (rkey, fallback) => {
+    const current = rateOverrides[rkey] !== undefined ? rateOverrides[rkey] : fallback;
+    const isModified = rateOverrides[rkey] !== undefined;
+    if (editingCell === rkey) return (
+      <input
+        value={editingVal}
+        onChange={e => setEditingVal(e.target.value)}
+        onBlur={() => { const n = Number(editingVal); if (!isNaN(n) && n >= 0) setRateOverride(rkey, n); setEditingCell(null); }}
+        onKeyDown={e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") setEditingCell(null); }}
+        autoFocus
+        style={{ width: 80, fontFamily: "'Space Mono', monospace", fontSize: 12, background: C.card, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 4, padding: "2px 6px", textAlign: "right", outline: "none" }}
+      />
+    );
+    return (
+      <span
+        onClick={() => { setEditingCell(rkey); setEditingVal(String(current)); }}
+        title={isModified ? `Modified — published rate ₹${fmt(fallback)}` : "Click to edit"}
+        style={{ ...mono, cursor: "pointer", color: isModified ? C.yellow : "inherit", fontSize: 12 }}
+      >
+        ₹{fmt(current)}
+      </span>
+    );
+  };
 
   const makeRef = (n, { type }, abbr) =>
     `${abbr}/${type.split(" ")[0].toUpperCase()}/${String(n).padStart(4, "0")}`;
@@ -179,19 +234,51 @@ export default function CfsApp({ onSwitch }) {
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 18, ...mono }}>ex-{detail.port} · arrived {detail.arrival_date} · dwell {detail.dwell}d {detail.in_yard ? "· IN YARD" : `· gated out ${detail.gate_out}`}</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               <div>
-                <div style={sectionTitle}>Charges per published tariff</div>
+                <div style={sectionTitle}>
+                  {detail.stale_rate_card ? "Charges per current published tariff (Jun 2024)" : "Charges per published tariff"}
+                </div>
                 {detail.billing_lines.map((b, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
                     <span style={{ color: C.muted }}>{b.label}</span><span style={mono}>₹{fmt(b.amount)}</span>
                   </div>
                 ))}
                 <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "8px 0", color: C.accent }}>
-                  <span>Expected</span><span style={mono}>₹{fmt(detail.expected)}</span>
+                  <span>Expected (current rates)</span><span style={mono}>₹{fmt(detail.expected)}</span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                  <span style={{ color: C.muted }}>Invoiced (billing system)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
-                </div>
-                {detail.variance < 0 && <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Leakage ₹{fmt(-detail.variance)} — {detail.leak_reason}</div>}
+
+                {detail.stale_rate_card && detail.invoiced_lines ? (
+                  <>
+                    <div style={{ fontSize: 11, color: C.yellow, textTransform: "uppercase", letterSpacing: "0.6px", marginTop: 14, marginBottom: 6 }}>
+                      Billing system applied — 2023 rate card
+                    </div>
+                    {detail.invoiced_lines.map((b, i) => {
+                      const expLine = detail.billing_lines.find(l => l.label === b.label);
+                      const isDiff = expLine && expLine.amount !== b.amount;
+                      return (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}`, background: isDiff ? C.red + "18" : "transparent" }}>
+                          <span style={{ color: isDiff ? C.red : C.muted }}>{b.label}</span>
+                          <span style={mono}>
+                            ₹{fmt(b.amount)}
+                            {isDiff && <span style={{ color: C.red, marginLeft: 8, fontSize: 11 }}>↓ from ₹{fmt(expLine.amount)}</span>}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontSize: 12 }}>
+                      <span style={{ color: C.muted }}>Invoiced (2023 rate card)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
+                    </div>
+                    <div style={{ marginTop: 4, padding: "8px 10px", background: C.red + "18", borderRadius: 6, fontSize: 12, color: C.red }}>
+                      Shortfall ₹{fmt(-detail.variance)} — rate card not updated after Jun 2024 revision
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                      <span style={{ color: C.muted }}>Invoiced (billing system)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
+                    </div>
+                    {detail.variance < 0 && <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Leakage ₹{fmt(-detail.variance)} — {detail.leak_reason}</div>}
+                  </>
+                )}
               </div>
               <div>
                 <div style={sectionTitle}>Allocated cost (activity-based)</div>
@@ -221,6 +308,7 @@ export default function CfsApp({ onSwitch }) {
         rails={[
           { id: "intelligence",  label: "Intelligence" },
           { id: "profitability", label: "Profitability" },
+          { id: "ratecard",      label: "Rate Card" },
           { id: "register",      label: `Register (${register.length})` },
         ]}
         active={stage}
@@ -569,6 +657,169 @@ export default function CfsApp({ onSwitch }) {
             </div>
           </>
         )}
+
+        {/* ── RATE CARD rail ── */}
+        {stage === "ratecard" && (() => {
+          const T = TARIFF;
+          const staleLeaks = LEAKS.filter(l => l.leak_reason?.toLowerCase().includes("rate card"));
+          return (
+            <>
+              {/* header + effective date */}
+              <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+                <div>
+                  <div style={sectionTitle}>Published tariff — active rate card</div>
+                  <div style={{ fontSize: 12, color: C.muted }}>Click any rate to edit. Changes auto-saved to session and highlighted in amber. Edits are for simulation only — they do not reprice historical invoices.</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontSize: 11, color: C.muted }}>Effective from</div>
+                  <input
+                    type="date"
+                    value={rateEffDate}
+                    onChange={e => setRateEffDate(e.target.value)}
+                    style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 12, fontFamily: "inherit" }}
+                  />
+                  <button onClick={() => { resetRateOverrides(); showToast("Rate card reset to published tariff"); }}
+                    style={{ ...btn, borderColor: C.muted, color: C.muted }}>
+                    Reset to published
+                  </button>
+                </div>
+              </div>
+
+              {/* import handling fees */}
+              <div style={card}>
+                <div style={sectionTitle}>Import handling & movement (per container)</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Port of discharge</th><th style={TH}>Class</th><th style={TH}>Service</th>
+                    <th style={{ ...TH, textAlign: "right" }}>20'</th>
+                    <th style={{ ...TH, textAlign: "right" }}>40'</th>
+                  </tr></thead>
+                  <tbody>
+                    {[
+                      ["Chennai", "GP",  "Load-out delivery",  "ch_gp_lo_20",  T.handling_import.Chennai.GP.loadout.s20,  "ch_gp_lo_40",  T.handling_import.Chennai.GP.loadout.s40],
+                      ["Chennai", "GP",  "De-stuffing service","ch_gp_ds_20",  T.handling_import.Chennai.GP.destuff.s20,  "ch_gp_ds_40",  T.handling_import.Chennai.GP.destuff.s40],
+                      ["Chennai", "ODC", "Load-out delivery",  "ch_od_lo_20",  T.handling_import.Chennai.ODC.loadout.s20, "ch_od_lo_40",  T.handling_import.Chennai.ODC.loadout.s40],
+                      ["Chennai", "ODC", "De-stuffing service","ch_od_ds_20",  T.handling_import.Chennai.ODC.destuff.s20, "ch_od_ds_40",  T.handling_import.Chennai.ODC.destuff.s40],
+                      ["Ennore",  "GP",  "Load-out delivery",  "en_gp_lo_20",  T.handling_import.Ennore.GP.loadout.s20,   "en_gp_lo_40",  T.handling_import.Ennore.GP.loadout.s40],
+                      ["Ennore",  "GP",  "De-stuffing service","en_gp_ds_20",  T.handling_import.Ennore.GP.destuff.s20,   "en_gp_ds_40",  T.handling_import.Ennore.GP.destuff.s40],
+                      ["Kattupalli","GP","Load-out delivery",  "kt_gp_lo_20",  T.handling_import.Kattupalli.GP.loadout.s20,"kt_gp_lo_40", T.handling_import.Kattupalli.GP.loadout.s40],
+                      ["Kattupalli","GP","De-stuffing service","kt_gp_ds_20",  T.handling_import.Kattupalli.GP.destuff.s20,"kt_gp_ds_40", T.handling_import.Kattupalli.GP.destuff.s40],
+                    ].map(([port, cls, svc, k20, v20, k40, v40]) => (
+                      <tr key={k20}>
+                        <td style={TD}>{port}</td>
+                        <td style={{ ...TD, fontSize: 12, color: C.muted }}>{cls}</td>
+                        <td style={{ ...TD, fontSize: 12 }}>{svc}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{rc(k20, v20)}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{rc(k40, v40)}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td style={TD}>All ports</td>
+                      <td style={{ ...TD, fontSize: 12, color: C.muted }}>–</td>
+                      <td style={{ ...TD, fontSize: 12 }}>Customs exam de-stuffing (&gt;25%)</td>
+                      <td style={{ ...TD, textAlign: "right" }}>{rc("exam_s20", T.exam_destuff.s20)}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>{rc("exam_s40", T.exam_destuff.s40)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Hazardous / Reefer: +25% on handling. ODC: billed at ODC rate (no additional multiplier on handling, 2× on holding).</div>
+              </div>
+
+              {/* holding slabs */}
+              <div style={card}>
+                <div style={sectionTitle}>Import holding slabs (₹/day · GP). Hazardous/Reefer = ×1.25 · ODC holding = ×2</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Dwell (days)</th>
+                    <th style={{ ...TH, textAlign: "right" }}>20' rate/day</th>
+                    <th style={{ ...TH, textAlign: "right" }}>40' rate/day</th>
+                  </tr></thead>
+                  <tbody>
+                    {T.holding_import.map((slab, i) => (
+                      <tr key={i}>
+                        <td style={{ ...TD, fontSize: 12 }}>
+                          {slab.from === slab.to ? `Day ${slab.from}` : slab.to === 9999 ? `Day ${slab.from}+` : `Days ${slab.from}–${slab.to}`}
+                          {i === 0 && <span style={{ marginLeft: 8, fontSize: 11, color: C.green }}>free</span>}
+                        </td>
+                        <td style={{ ...TD, textAlign: "right" }}>
+                          {slab.s20 === 0 ? <span style={{ color: C.muted, fontSize: 12 }}>—</span> : rc(`slab_${i}_s20`, slab.s20)}
+                        </td>
+                        <td style={{ ...TD, textAlign: "right" }}>
+                          {slab.s40 === 0 ? <span style={{ color: C.muted, fontSize: 12 }}>—</span> : rc(`slab_${i}_s40`, slab.s40)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* ancillaries */}
+              <div style={card}>
+                <div style={sectionTitle}>Ancillary charges</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Charge</th>
+                    <th style={{ ...TH, textAlign: "right" }}>20'</th>
+                    <th style={{ ...TH, textAlign: "right" }}>40'</th>
+                  </tr></thead>
+                  <tbody>
+                    {[
+                      ["Energy surcharge",          "anc_en_20", T.ancillary.energy_surcharge.s20,  "anc_en_40", T.ancillary.energy_surcharge.s40],
+                      ["Reefer plugging (per day)", "anc_rp_20", T.ancillary.reefer_plugging.s20,   "anc_rp_40", T.ancillary.reefer_plugging.s40],
+                      ["Lift on/off (laden)",        "anc_ll_20", T.ancillary.lift_onoff_laden.s20,  "anc_ll_40", T.ancillary.lift_onoff_laden.s40],
+                    ].map(([label, k20, v20, k40, v40]) => (
+                      <tr key={k20}>
+                        <td style={{ ...TD, fontSize: 12 }}>{label}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{rc(k20, v20)}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{rc(k40, v40)}</td>
+                      </tr>
+                    ))}
+                    {[
+                      ["RFID container tracking (per TEU)", "anc_rfid", T.ancillary.rfid_per_teu],
+                      ["Risk management / insurance (per TEU)", "anc_risk", T.ancillary.risk_mgmt_per_teu],
+                      ["Weighment",             "anc_wt",   T.ancillary.weighment],
+                      ["Scanning movement",     "anc_scan", T.ancillary.scanning_movement],
+                      ["Seal (OTL)",            "anc_seal", T.ancillary.seal_otl],
+                      ["Auction cargo handling","anc_auc",  T.auction.handling_per_box],
+                      ["Valuation & NOC",       "anc_noc",  T.auction.valuation_noc],
+                    ].map(([label, key, val]) => (
+                      <tr key={key}>
+                        <td style={{ ...TD, fontSize: 12 }}>{label}</td>
+                        <td style={{ ...TD, textAlign: "right" }}>{rc(key, val)}</td>
+                        <td style={{ ...TD, textAlign: "right", color: C.muted, fontSize: 12 }}>—</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* stale rate card leakage */}
+              {staleLeaks.length > 0 && (
+                <div style={card}>
+                  <div style={sectionTitle}>Detected leakage — stale rate card ({staleLeaks.length} containers)</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                    Containers reconciled against the current rate card where the billing system applied an older tariff version.
+                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr>
+                      <th style={TH}>Container</th><th style={TH}>Consignee</th><th style={TH}>Issue</th>
+                      <th style={{ ...TH, textAlign: "right" }}>Shortfall</th><th style={TH}></th>
+                    </tr></thead>
+                    <tbody>{staleLeaks.map(l => (
+                      <tr key={l.container_id}>
+                        <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no}</td>
+                        <td style={TD}>{l.consignee}</td>
+                        <td style={{ ...TD, fontSize: 12, color: C.muted }}>{l.leak_reason}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", color: C.red, fontWeight: 700 }}>₹{fmt(-l.variance)}</td>
+                        <td style={{ ...TD, textAlign: "right" }}><button style={btn} onClick={() => issueDebitNote(l)}>Debit note →</button></td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {/* ── REGISTER rail ── */}
         {stage === "register" && (

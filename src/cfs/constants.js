@@ -9,13 +9,26 @@ export const FACILITIES = [
   { facility_id: "VICHOOR", name: "Vichoor CFS", area_acres: 27, warehouse_sft: 240000, bonded: true, annual_teu_capacity: 200000 },
 ];
 
-// ── PUBLISHED TARIFF (effective 15-06-2023, fully transcribed) ────────────────
+// ── LEGACY TARIFF — 2023 handling rates (what stale billing systems still apply) ─
+export const TARIFF_LEGACY_HANDLING = {
+  "Chennai":    { GP:  { loadout: { s20: 7500,  s40: 9750  }, destuff: { s20: 9000,  s40: 11850 } },
+                  ODC: { loadout: { s20: 12000, s40: 15000 }, destuff: { s20: 15000, s40: 21500 } } },
+  "Ennore":     { GP:  { loadout: { s20: 9200,  s40: 12400 }, destuff: { s20: 10700, s40: 14500 } },
+                  ODC: { loadout: { s20: 13700, s40: 17650 }, destuff: { s20: 16700, s40: 24150 } } },
+  "Kattupalli": { GP:  { loadout: { s20: 9200,  s40: 12400 }, destuff: { s20: 10700, s40: 14500 } },
+                  ODC: { loadout: { s20: 13700, s40: 17650 }, destuff: { s20: 16700, s40: 24150 } } },
+};
+
+// Containers whose billing system invoiced using the 2023 (legacy) rate card.
+export const STALE_RATE_CARD_IDS = new Set(["CN026", "CN037"]);
+
+// ── PUBLISHED TARIFF (current, revised June 2024) ─────────────────────────────
 export const TARIFF = {
-  effective_from: "2023-06-15",
+  effective_from: "2024-06-01",
   // Import handling (terminal handling + movement), by port of discharge.
-  // loadout = delivery on load-out basis; destuff = destuffing service.
+  // Chennai GP revised to current published sheet. Other ports/classes unchanged from 2023.
   handling_import: {
-    "Chennai":    { GP:  { loadout: { s20: 7500,  s40: 9750  }, destuff: { s20: 9000,  s40: 11850 } },
+    "Chennai":    { GP:  { loadout: { s20: 12200, s40: 17150 }, destuff: { s20: 13700, s40: 19250 } },
                     ODC: { loadout: { s20: 12000, s40: 15000 }, destuff: { s20: 15000, s40: 21500 } } },
     "Ennore":     { GP:  { loadout: { s20: 9200,  s40: 12400 }, destuff: { s20: 10700, s40: 14500 } },
                     ODC: { loadout: { s20: 13700, s40: 17650 }, destuff: { s20: 16700, s40: 24150 } } },
