@@ -22,6 +22,26 @@ export function groundRent(days, size, holdingMult = 1) {
   return Math.round(total * holdingMult);
 }
 
+// Current slab rate + next escalation info for an in-yard container.
+export function getSlabEscalation(dwell, size, holdingMult = 1) {
+  const s = size === 20 ? "s20" : "s40";
+  for (let i = 0; i < TARIFF.holding_import.length; i++) {
+    const slab = TARIFF.holding_import[i];
+    if (dwell >= slab.from && dwell <= slab.to) {
+      const currentRate = Math.round(slab[s] * holdingMult);
+      const next = TARIFF.holding_import[i + 1];
+      return {
+        currentRate,
+        isFree: currentRate === 0,
+        daysUntilEscalation: next ? next.from - dwell : null,
+        nextRate: next ? Math.round(next[s] * holdingMult) : null,
+        isMaxSlab: !next,
+      };
+    }
+  }
+  return null;
+}
+
 // Itemised billing per container.
 // T = effective tariff (current published rates + any UI overrides).
 // handlingRates overrides T.handling_import — used for stale-rate-card containers
@@ -116,6 +136,19 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
     const billing = computeBilling(c, null, ET);                // current effective rates
     const cost = computeCost(c);
 
+    const groundRentLine = billing.lines.find(l => l.label.startsWith("Ground rent"));
+    const handlingLine = billing.lines.find(l => l.label.startsWith("Handling"));
+    const holdingMult = (ET.class_rules[c.cargo_class] || ET.class_rules.GP).holding_mult;
+    let slabInfo = null;
+    if (inYard(c)) {
+      slabInfo = getSlabEscalation(dwellDays(c), c.size, holdingMult);
+      if (slabInfo && slabInfo.daysUntilEscalation !== null) {
+        const d = new Date(TODAY);
+        d.setDate(d.getDate() + slabInfo.daysUntilEscalation);
+        slabInfo = { ...slabInfo, escalationDate: d.toISOString().slice(0, 10) };
+      }
+    }
+
     let invoiced, invoiced_lines, leak_reason, stale_rate_card;
     if (STALE_RATE_CARD_IDS.has(c.container_id)) {
       // invoiced = recomputed using legacy 2023 handling rates + current ancillaries
@@ -149,6 +182,9 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
       cost: cost.total,
       cost_lines: cost.lines,
       margin: invoiced - cost.total,
+      groundRentCharged: groundRentLine?.amount || 0,
+      handlingCharged: handlingLine?.amount || 0,
+      slabInfo,
     };
   });
 
@@ -164,15 +200,25 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
     const map = {};
     LEDGER.forEach(l => {
       const k = keyFn(l);
-      if (!map[k]) map[k] = { key: k, boxes: 0, teu: 0, revenue: 0, cost: 0, margin: 0, dwellSum: 0 };
+      if (!map[k]) map[k] = { key: k, boxes: 0, teu: 0, revenue: 0, cost: 0, margin: 0, dwellSum: 0, groundRentSum: 0, handlingSum: 0, clearedIn5d: 0, closedImportBoxes: 0 };
       const m = map[k];
       m.boxes++; m.teu += l.teu; m.revenue += l.invoiced; m.cost += l.cost; m.margin += l.margin; m.dwellSum += l.dwell;
+      m.groundRentSum += l.groundRentCharged;
+      m.handlingSum += l.handlingCharged;
+      if (!l.in_yard && l.direction === "Import") {
+        m.closedImportBoxes++;
+        if (l.dwell <= 5) m.clearedIn5d++;
+      }
     });
     return Object.values(map).map(m => ({
       ...m,
       marginPct: m.revenue ? Math.round((m.margin / m.revenue) * 100) : 0,
       revPerTeu: m.teu ? Math.round(m.revenue / m.teu) : 0,
       avgDwell: (m.dwellSum / m.boxes).toFixed(1),
+      groundRentShare: m.revenue ? Math.round((m.groundRentSum / m.revenue) * 100) : 0,
+      avgGroundRent: m.boxes ? Math.round(m.groundRentSum / m.boxes) : 0,
+      avgHandling: m.boxes ? Math.round(m.handlingSum / m.boxes) : 0,
+      pctCleared5d: m.closedImportBoxes > 0 ? Math.round((m.clearedIn5d / m.closedImportBoxes) * 100) : null,
     })).sort((a, b) => b.margin - a.margin);
   }
 
@@ -215,6 +261,15 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
     return { revenue, cost, margin: revenue - cost, teu: teuTotal, boxes: LEDGER.length };
   })();
 
+  const closedImport = LEDGER.filter(l => !l.in_yard && l.direction === "Import");
+  const totalGroundRent = LEDGER.reduce((s, l) => s + l.groundRentCharged, 0);
+  const DWELL_SUMMARY = {
+    pctCleared5d: closedImport.length ? Math.round(closedImport.filter(l => l.dwell <= 5).length / closedImport.length * 100) : 0,
+    totalGroundRentRevenue: totalGroundRent,
+    groundRentShareOfTotal: TOTALS.revenue ? Math.round(totalGroundRent / TOTALS.revenue * 100) : 0,
+    nudgeCount: YARD.filter(l => l.slabInfo?.daysUntilEscalation !== null && l.slabInfo.daysUntilEscalation <= 5).length,
+  };
+
   return {
     LEDGER,
     LEAKS,
@@ -229,6 +284,7 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
     SLOT_ECONOMICS,
     MONTHLY_THROUGHPUT,
     TOTALS,
+    DWELL_SUMMARY,
   };
 }
 

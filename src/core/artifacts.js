@@ -16,17 +16,10 @@ const PRINT_CSS = `
 `;
 
 /**
- * Opens a printable artifact in a new window.
- * @param {object} company  - { name, address }
- * @param {string} title    - document title (also h2 heading)
- * @param {string} bodyHtml - inner HTML after the ref/date line
- * @param {string} refNo    - document reference number
- * @param {string} [date]   - override date (defaults to today)
+ * Builds a printable artifact as a full HTML string.
  */
-export function openPrintable(company, title, bodyHtml, refNo, date = TODAY) {
-  const w = window.open("", "_blank", "width=820,height=900");
-  if (!w) return;
-  w.document.write(`<!doctype html><html><head><title>${title}</title><style>${PRINT_CSS}</style></head><body>
+export function buildPrintableHtml(company, title, bodyHtml, refNo, date = TODAY) {
+  return `<!doctype html><html><head><title>${title}</title><style>${PRINT_CSS}</style></head><body>
     <div class="demo">DEMO ARTIFACT — SYNTHETIC DATA</div>
     <div class="head">
       <div class="co">${company.name}</div>
@@ -36,6 +29,15 @@ export function openPrintable(company, title, bodyHtml, refNo, date = TODAY) {
     ${bodyHtml}
     <div class="sig">For <b>${company.name}</b><br/><br/><br/>Authorised Signatory</div>
     <button class="noprint" onclick="window.print()" style="margin-top:32px;padding:10px 24px;font-size:14px;cursor:pointer">Print / Save as PDF</button>
-  </body></html>`);
+  </body></html>`;
+}
+
+/**
+ * Opens a printable artifact in a new window (non-preview environments).
+ */
+export function openPrintable(company, title, bodyHtml, refNo, date = TODAY) {
+  const w = window.open("", "_blank", "width=820,height=900");
+  if (!w) return;
+  w.document.write(buildPrintableHtml(company, title, bodyHtml, refNo, date));
   w.document.close();
 }

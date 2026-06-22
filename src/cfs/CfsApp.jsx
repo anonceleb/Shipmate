@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { C, applyTheme } from "../data/constants.js";
 import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF, TARIFF_REVISION } from "./constants.js";
 import {
   fmt, TODAY, MANALI_CAPACITY, bucketOf, getComputations,
 } from "./computations.js";
-import { openPrintable } from "../core/artifacts.js";
+import { buildPrintableHtml } from "../core/artifacts.js";
 import { useRegister } from "../core/register.js";
 import { useClaudeQuery } from "../core/query.js";
 import { LifecycleShell } from "../core/LifecycleShell.jsx";
@@ -63,12 +63,16 @@ export default function CfsApp({ onSwitch }) {
   const {
     LEDGER, LEAKS, TOTAL_LEAKAGE, YARD, YARD_ACCRUED, LONG_STAY,
     BY_CONSIGNEE, BY_CHA, BY_CLASS, BY_PORT, SLOT_ECONOMICS, MONTHLY_THROUGHPUT,
-    TOTALS,
+    TOTALS, DWELL_SUMMARY,
   } = getComputations(terminal.abbr, rateOverrides);
 
-  const [stage, setStage] = useState("recover");
+  const [stage, setStage] = useState("operate");
   const [toast, setToast] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [printDoc, setPrintDoc] = useState(null);
+  const [demandModal, setDemandModal] = useState(null);
+  const [demandFinalAmount, setDemandFinalAmount] = useState(0);
+  const printDocRef = useRef(null);
   const setRateOverride = (key, val) => {
     const next = { ...allRateOverrides, [terminal.abbr]: { ...rateOverrides, [key]: val } };
     setAllRateOverrides(next);
@@ -127,7 +131,9 @@ export default function CfsApp({ onSwitch }) {
   const pushToRegister = termIdx === 0 ? push0 : push1;
   const clearRegister  = termIdx === 0 ? clear0 : clear1;
 
-  const print = (title, bodyHtml, refNo) => openPrintable(terminal, title, bodyHtml, refNo);
+  const print = (title, bodyHtml, refNo) => {
+    setPrintDoc({ title, html: buildPrintableHtml(terminal, title, bodyHtml, refNo) });
+  };
 
   const buildSystem = () =>
     SCHEMA_DESC_CFS +
@@ -167,16 +173,45 @@ export default function CfsApp({ onSwitch }) {
   };
 
   const issueDemandNotice = l => {
-    const ref = logAction("Demand Notice", l.consignee, l.container_no, l.expected);
+    setDemandModal(l);
+    setDemandFinalAmount(l.expected);
+  };
+
+  const confirmDemandNotice = (l, finalAmt) => {
+    const hasReduction = finalAmt < l.expected;
+    const ref = logAction("Demand Notice", l.consignee, l.container_no, finalAmt);
     print("Demand Notice", `
       <h2>Demand Notice — Accrued CFS Charges</h2>
       <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
       <p>Container <b>${l.container_no}</b> (${l.size}', ${l.commodity}) arrived at our CFS on ${l.arrival_date} and remains uncleared for <b>${l.dwell} days</b>.</p>
       <table><tr><th>Charge head</th><th>Amount (₹)</th></tr>
       ${l.billing_lines.map(b => `<tr><td>${b.label}</td><td>${fmt(b.amount)}</td></tr>`).join("")}
-      <tr><th>Total accrued to date</th><th>₹${fmt(l.expected)} + GST</th></tr></table>
+      <tr><th>Total accrued to date</th><th>₹${fmt(l.expected)} + GST</th></tr>
+      ${hasReduction ? `<tr><th>Agreed settlement amount</th><th>₹${fmt(finalAmt)} + GST</th></tr>` : ""}
+      </table>
+      ${hasReduction ? `<p style="color:#c00"><b>Note:</b> Agreed settlement of ₹${fmt(finalAmt)} represents a reduction of ₹${fmt(l.expected - finalAmt)} from the accrued total. A credit note will be issued separately for the balance.</p>` : ""}
       <p>Ground rent continues to accrue daily per the published slab. You are requested to clear the consignment and settle all dues within 7 days, failing which action under Section 48 of the Customs Act, 1962 (disposal of uncleared goods) will be initiated.</p>`, ref);
+    setDemandModal(null);
     showToast(`Demand notice ${ref} generated & logged`);
+  };
+
+  const issueCreditNote = (l, finalAmt) => {
+    const creditAmt = l.expected - finalAmt;
+    const ref = logAction("Credit Note", l.consignee, l.container_no, -creditAmt);
+    print("Credit Note", `
+      <h2>Credit Note</h2>
+      <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
+      <p>Container <b>${l.container_no}</b> (${l.size}', ${l.commodity})</p>
+      <p>With reference to the demand notice for accrued CFS charges of ₹${fmt(l.expected)}, and pursuant to commercial settlement at ₹${fmt(finalAmt)}, we hereby issue a credit note for the agreed reduction:</p>
+      <table>
+        <tr><th>Particulars</th><th>Amount (₹)</th></tr>
+        <tr><td>Accrued CFS charges per demand notice</td><td>₹${fmt(l.expected)}</td></tr>
+        <tr><td>Agreed settlement amount</td><td>₹${fmt(finalAmt)}</td></tr>
+        <tr><th>Credit to PD account</th><th>₹${fmt(creditAmt)}</th></tr>
+      </table>
+      <p>This credit of ₹${fmt(creditAmt)} will be applied to the party's PD account within 3 working days.</p>`, ref);
+    setDemandModal(null);
+    showToast(`Credit note ${ref} generated & logged`);
   };
 
   const issueAuctionDocket = l => {
@@ -225,6 +260,82 @@ export default function CfsApp({ onSwitch }) {
 
       {toast && (
         <div style={{ position: "fixed", bottom: 28, right: 28, zIndex: 2000, background: C.green, color: "#000", padding: "14px 20px", borderRadius: 10, fontWeight: 600, fontSize: 13, maxWidth: 400 }}>✓ {toast}</div>
+      )}
+
+      {/* ── Printable document viewer (replaces window.open — works in preview) ── */}
+      {printDoc && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 3000 }}>
+          <div style={{ width: "100%", maxWidth: 860, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 8px 10px" }}>
+            <span style={{ color: "#fff", fontWeight: 600, fontSize: 14 }}>{printDoc.title}</span>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => printDocRef.current?.contentWindow?.print()} style={{ ...btn, borderColor: C.accent, color: C.accent }}>Print / Save PDF</button>
+              <button onClick={() => setPrintDoc(null)} style={{ ...btn, borderColor: C.border, color: C.muted }}>Close</button>
+            </div>
+          </div>
+          <iframe
+            ref={printDocRef}
+            srcDoc={printDoc.html}
+            style={{ width: "100%", maxWidth: 860, height: "82vh", border: "none", borderRadius: 10, background: "#fff" }}
+            title={printDoc.title}
+          />
+        </div>
+      )}
+
+      {/* ── Demand notice input modal ── */}
+      {demandModal && (
+        <div onClick={() => setDemandModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: 12, padding: 28, width: 560, maxHeight: "88vh", overflowY: "auto", border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>Demand Notice — {demandModal.container_no}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 18, ...mono }}>
+              {demandModal.consignee} · {demandModal.size}' {demandModal.cargo_class} · arrived {demandModal.arrival_date} · {demandModal.dwell} days in yard
+            </div>
+            <div style={sectionTitle}>Accrued charges</div>
+            {demandModal.billing_lines.map((b, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ color: C.muted }}>{b.label}</span>
+                <span style={mono}>₹{fmt(b.amount)}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "10px 0", color: C.accent, marginBottom: 20 }}>
+              <span>Total accrued</span><span style={mono}>₹{fmt(demandModal.expected)}</span>
+            </div>
+            <div style={{ background: C.surface, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 8 }}>Final settlement amount</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 15, color: C.muted, ...mono }}>₹</span>
+                <input
+                  type="number"
+                  value={demandFinalAmount}
+                  onChange={e => setDemandFinalAmount(Math.max(0, Number(e.target.value)))}
+                  style={{ flex: 1, padding: "10px 12px", borderRadius: 6, border: `1px solid ${demandFinalAmount > demandModal.expected ? C.red : C.border}`, background: C.card, color: C.text, fontSize: 15, fontFamily: "'Space Mono', monospace", outline: "none" }}
+                />
+              </div>
+              {demandFinalAmount < demandModal.expected && demandFinalAmount > 0 && (
+                <div style={{ marginTop: 8, fontSize: 12, color: C.yellow }}>
+                  Negotiated reduction: ₹{fmt(demandModal.expected - demandFinalAmount)} — a credit note will be raised for this amount.
+                </div>
+              )}
+              {demandFinalAmount > demandModal.expected && (
+                <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Amount exceeds total accrued.</div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button style={{ ...btn, borderColor: C.border, color: C.muted }} onClick={() => setDemandModal(null)}>Cancel</button>
+              {demandFinalAmount > 0 && demandFinalAmount < demandModal.expected && (
+                <button style={{ ...btn, borderColor: C.yellow, color: C.yellow }} onClick={() => issueCreditNote(demandModal, demandFinalAmount)}>
+                  Credit note ₹{fmt(demandModal.expected - demandFinalAmount)} →
+                </button>
+              )}
+              <button
+                disabled={demandFinalAmount <= 0 || demandFinalAmount > demandModal.expected}
+                style={{ ...btn, background: demandFinalAmount > 0 && demandFinalAmount <= demandModal.expected ? C.accent + "22" : "transparent", color: demandFinalAmount > 0 && demandFinalAmount <= demandModal.expected ? C.accent : C.muted, borderColor: demandFinalAmount > 0 && demandFinalAmount <= demandModal.expected ? C.accent : C.border }}
+                onClick={() => confirmDemandNotice(demandModal, demandFinalAmount)}
+              >
+                Generate demand notice →
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {detail && (
@@ -408,36 +519,196 @@ export default function CfsApp({ onSwitch }) {
 
         {/* ── OPERATE — yard & dwell ── */}
         {stage === "operate" && (
-          <div style={card}>
-            <div style={sectionTitle}>Containers in yard — ground rent accruing daily (as of {TODAY})</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr>
-                <th style={TH}>Container</th><th style={TH}>Consignee / CHA</th><th style={TH}>Cargo</th>
-                <th style={{ ...TH, textAlign: "right" }}>Dwell</th><th style={TH}>Slab today</th>
-                <th style={{ ...TH, textAlign: "right" }}>Accrued</th><th style={TH}></th>
-              </tr></thead>
-              <tbody>{YARD.map(l => {
-                const b = bucketOf(l.dwell);
-                const slabColor = l.dwell <= 3 ? C.green : l.dwell <= 15 ? C.yellow : C.red;
-                return (
-                  <tr key={l.container_id}>
-                    <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
-                    <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
-                    <td style={{ ...TD, fontSize: 12 }}>{l.commodity}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: slabColor }}>{l.dwell}d</td>
-                    <td style={{ ...TD, fontSize: 12, color: slabColor }}>{b?.label}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
-                    <td style={{ ...TD, textAlign: "right" }}>
-                      {l.dwell > 3 && <button style={btn} onClick={() => issueDemandNotice(l)}>Demand notice →</button>}
-                    </td>
-                  </tr>
-                );
-              })}</tbody>
-            </table>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
-              Aging mirrors the published holding slabs — 3 free days, then ₹500/day (20') escalating to ₹5,000/day from day 91 (40' = 2×). Click a container for the itemised charge sheet.
+          <>
+            {/* Yard snapshot */}
+            <div style={card}>
+              <div style={sectionTitle}>Containers in yard — ground rent accruing daily (as of {TODAY})</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Container</th><th style={TH}>Consignee / CHA</th><th style={TH}>Cargo</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Dwell</th><th style={TH}>Slab today</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Accrued</th><th style={TH}></th>
+                </tr></thead>
+                <tbody>{YARD.map(l => {
+                  const b = bucketOf(l.dwell);
+                  const slabColor = l.dwell <= 3 ? C.green : l.dwell <= 15 ? C.yellow : C.red;
+                  return (
+                    <tr key={l.container_id}>
+                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
+                      <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
+                      <td style={{ ...TD, fontSize: 12 }}>{l.commodity}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: slabColor }}>{l.dwell}d</td>
+                      <td style={{ ...TD, fontSize: 12, color: slabColor }}>{b?.label}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        {l.dwell > 3 && <button style={btn} onClick={() => issueDemandNotice(l)}>Demand notice →</button>}
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
+                Aging mirrors the published holding slabs — 3 free days, then ₹500/day (20') escalating to ₹5,000/day from day 91 (40' = 2×). Click a container for the itemised charge sheet.
+              </div>
             </div>
-          </div>
+
+            {/* ── DWELL OPTIMISATION ── */}
+            <div style={{ borderTop: `2px solid ${C.border}`, margin: "4px 0 20px", position: "relative" }}>
+              <span style={{ position: "absolute", top: -10, left: 0, background: C.bg, paddingRight: 12, fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "1px" }}>Dwell Optimisation</span>
+            </div>
+
+            {/* Summary chips */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 20 }}>
+              {[
+                {
+                  label: "Closed boxes cleared ≤5 days",
+                  value: `${DWELL_SUMMARY.pctCleared5d}%`,
+                  sub: "target: >70% — handling trumps ground rent",
+                  hot: DWELL_SUMMARY.pctCleared5d < 70,
+                },
+                {
+                  label: "Ground rent share of revenue",
+                  value: `${DWELL_SUMMARY.groundRentShareOfTotal}%`,
+                  sub: `₹${fmt(DWELL_SUMMARY.totalGroundRentRevenue)} earned — slot cost not captured`,
+                  hot: DWELL_SUMMARY.groundRentShareOfTotal > 20,
+                },
+                {
+                  label: "Escalations within 5 days",
+                  value: `${DWELL_SUMMARY.nudgeCount}`,
+                  sub: "containers crossing to next slab this week",
+                  hot: DWELL_SUMMARY.nudgeCount > 0,
+                },
+              ].map(s => (
+                <div key={s.label} style={{ background: C.surface, border: `1px solid ${s.hot ? C.red : C.border}`, borderRadius: 8, padding: 14 }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.7px" }}>{s.label}</div>
+                  <div style={{ fontSize: 24, fontWeight: 700, ...mono, marginTop: 6, color: s.hot ? C.red : C.text }}>{s.value}</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{s.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Escalation tracker */}
+            <div style={card}>
+              <div style={sectionTitle}>Escalation tracker — slab countdown for in-yard containers</div>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                Handling fees are earned once at clearance regardless of dwell. Each additional day in a paid slab earns ground rent but blocks the slot from the next consignment's handling fee. Prioritise clearance of containers approaching slab jumps.
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Container</th>
+                  <th style={TH}>Consignee</th>
+                  <th style={TH}>Cargo / class</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Dwell</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Rate today</th>
+                  <th style={TH}>Next escalation</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Next rate/day</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Accrued</th>
+                </tr></thead>
+                <tbody>
+                  {[...YARD].sort((a, b) => {
+                    const da = a.slabInfo?.isMaxSlab ? 9999 : (a.slabInfo?.daysUntilEscalation ?? 9998);
+                    const db = b.slabInfo?.isMaxSlab ? 9999 : (b.slabInfo?.daysUntilEscalation ?? 9998);
+                    return da - db;
+                  }).map(l => {
+                    const si = l.slabInfo;
+                    const urgencyColor = si?.isMaxSlab ? C.red
+                      : si?.daysUntilEscalation <= 2 ? C.red
+                      : si?.daysUntilEscalation <= 5 ? C.yellow
+                      : C.muted;
+                    return (
+                      <tr key={l.container_id}>
+                        <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>
+                          {l.container_no} <span style={{ color: C.muted }}>({l.size}')</span>
+                        </td>
+                        <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
+                        <td style={{ ...TD, fontSize: 12 }}>{l.commodity}<div style={{ fontSize: 11, color: C.muted }}>{l.cargo_class}</div></td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: l.dwell > 30 ? C.red : l.dwell > 15 ? C.yellow : C.text }}>
+                          {l.dwell}d
+                        </td>
+                        <td style={{ ...TD, ...mono, textAlign: "right" }}>
+                          {si?.isFree
+                            ? <span style={{ color: C.green }}>Free</span>
+                            : si ? `₹${fmt(si.currentRate)}/d` : "—"}
+                        </td>
+                        <td style={{ ...TD, fontSize: 12, color: urgencyColor, fontWeight: si?.daysUntilEscalation <= 5 ? 600 : 400 }}>
+                          {si?.isMaxSlab
+                            ? <span style={{ color: C.red }}>Max slab — no further escalation</span>
+                            : si?.daysUntilEscalation === 1
+                            ? `Tomorrow · ${si.escalationDate}`
+                            : si?.daysUntilEscalation != null
+                            ? `${si.daysUntilEscalation} days · ${si.escalationDate}`
+                            : "—"}
+                        </td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", color: si?.nextRate ? C.muted : C.red }}>
+                          {si?.nextRate ? `₹${fmt(si.nextRate)}/d` : si?.isMaxSlab ? `₹${fmt(si.currentRate)}/d` : "—"}
+                        </td>
+                        <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Consignee dwell profile */}
+            <div style={card}>
+              <div style={sectionTitle}>Consignee dwell profile — handling vs ground rent revenue split (import)</div>
+              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                When ground rent forms a high share of an account's revenue, that consignee is occupying slots beyond their billing value — the handling fees a fast-turning replacement box would have generated are foregone. Target: ≥70% of boxes cleared within 5 days.
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Consignee</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Boxes</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Avg dwell</th>
+                  <th style={{ ...TH, textAlign: "right" }}>≤5d cleared</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Avg handling</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Avg ground rent</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Ground rent %</th>
+                  <th style={TH}>Profile</th>
+                </tr></thead>
+                <tbody>
+                  {BY_CONSIGNEE
+                    .filter(r => LEDGER.some(l => l.consignee === r.key && l.direction === "Import"))
+                    .sort((a, b) => parseFloat(b.avgDwell) - parseFloat(a.avgDwell))
+                    .map(r => {
+                      const isSlow = r.groundRentShare > 30 || (r.pctCleared5d !== null && r.pctCleared5d < 20);
+                      const isFast = r.pctCleared5d !== null && r.pctCleared5d >= 70 && r.groundRentShare < 15;
+                      const dwellNum = parseFloat(r.avgDwell);
+                      return (
+                        <tr key={r.key}>
+                          <td style={TD}>{r.key}</td>
+                          <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.boxes}</td>
+                          <td style={{ ...TD, ...mono, textAlign: "right", color: dwellNum > 15 ? C.red : dwellNum > 7 ? C.yellow : C.green }}>
+                            {r.avgDwell}d
+                          </td>
+                          <td style={{ ...TD, ...mono, textAlign: "right", color: r.pctCleared5d === null ? C.muted : r.pctCleared5d >= 70 ? C.green : r.pctCleared5d >= 40 ? C.yellow : C.red }}>
+                            {r.pctCleared5d === null ? "—" : `${r.pctCleared5d}%`}
+                          </td>
+                          <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.avgHandling)}</td>
+                          <td style={{ ...TD, ...mono, textAlign: "right", color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.muted }}>
+                            ₹{fmt(r.avgGroundRent)}
+                          </td>
+                          <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: r.groundRentShare > 30 ? 700 : 400, color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.green }}>
+                            {r.groundRentShare}%
+                          </td>
+                          <td style={{ ...TD, fontSize: 12 }}>
+                            {isFast
+                              ? <span style={{ color: C.green, fontWeight: 600 }}>Fast clearer</span>
+                              : isSlow
+                              ? <span style={{ color: C.red, fontWeight: 600 }}>Chronic slow</span>
+                              : <span style={{ color: C.muted }}>Normal</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
+                Ground rent % = ground rent revenue as share of total invoiced revenue per account. In-yard containers counted in avg dwell but excluded from ≤5d cleared (not yet closed).
+              </div>
+            </div>
+          </>
         )}
 
         {/* ── BILL — demand notices & long-stay escalation ── */}
