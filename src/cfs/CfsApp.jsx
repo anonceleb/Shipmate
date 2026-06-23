@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ScatterChart, Scatter, ReferenceLine, LineChart, Line } from "recharts";
 import { C, applyTheme } from "../data/constants.js";
 import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF, TARIFF_REVISION } from "./constants.js";
 import {
@@ -36,6 +36,7 @@ const TD = { padding: "8px 10px", fontSize: 13, borderBottom: `1px solid ${C.bor
 const mono = { fontFamily: "'Space Mono', monospace" };
 const btn = { padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: "inherit" };
 const sectionTitle = { fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 10 };
+const SLAB_COLORS = ["#22c55e","#84cc16","#eab308","#fb923c","#f97316","#ef4444","#dc2626","#b91c1c","#7f1d1d"];
 
 const STAGES = [
   { id: "quote",   label: "Quote",   hint: "commercial repricing — accounts below margin floor" },
@@ -71,7 +72,9 @@ export default function CfsApp({ onSwitch }) {
   const [detail, setDetail] = useState(null);
   const [printDoc, setPrintDoc] = useState(null);
   const [demandModal, setDemandModal] = useState(null);
-  const [demandFinalAmount, setDemandFinalAmount] = useState(0);
+  const [demandStep, setDemandStep] = useState("notice"); // "notice" | "credit"
+  const [demandNoticeRef, setDemandNoticeRef] = useState(null);
+  const [creditNoteAmount, setCreditNoteAmount] = useState("");
   const printDocRef = useRef(null);
   const setRateOverride = (key, val) => {
     const next = { ...allRateOverrides, [terminal.abbr]: { ...rateOverrides, [key]: val } };
@@ -174,12 +177,13 @@ export default function CfsApp({ onSwitch }) {
 
   const issueDemandNotice = l => {
     setDemandModal(l);
-    setDemandFinalAmount(l.expected);
+    setDemandStep("notice");
+    setDemandNoticeRef(null);
+    setCreditNoteAmount("");
   };
 
-  const confirmDemandNotice = (l, finalAmt) => {
-    const hasReduction = finalAmt < l.expected;
-    const ref = logAction("Demand Notice", l.consignee, l.container_no, finalAmt);
+  const confirmDemandNotice = l => {
+    const ref = logAction("Demand Notice", l.consignee, l.container_no, l.expected);
     print("Demand Notice", `
       <h2>Demand Notice — Accrued CFS Charges</h2>
       <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
@@ -187,29 +191,28 @@ export default function CfsApp({ onSwitch }) {
       <table><tr><th>Charge head</th><th>Amount (₹)</th></tr>
       ${l.billing_lines.map(b => `<tr><td>${b.label}</td><td>${fmt(b.amount)}</td></tr>`).join("")}
       <tr><th>Total accrued to date</th><th>₹${fmt(l.expected)} + GST</th></tr>
-      ${hasReduction ? `<tr><th>Agreed settlement amount</th><th>₹${fmt(finalAmt)} + GST</th></tr>` : ""}
       </table>
-      ${hasReduction ? `<p style="color:#c00"><b>Note:</b> Agreed settlement of ₹${fmt(finalAmt)} represents a reduction of ₹${fmt(l.expected - finalAmt)} from the accrued total. A credit note will be issued separately for the balance.</p>` : ""}
       <p>Ground rent continues to accrue daily per the published slab. You are requested to clear the consignment and settle all dues within 7 days, failing which action under Section 48 of the Customs Act, 1962 (disposal of uncleared goods) will be initiated.</p>`, ref);
-    setDemandModal(null);
+    setDemandNoticeRef(ref);
+    setDemandStep("credit");
     showToast(`Demand notice ${ref} generated & logged`);
   };
 
-  const issueCreditNote = (l, finalAmt) => {
-    const creditAmt = l.expected - finalAmt;
+  const issueCreditNote = (l, creditAmt, dnRef) => {
+    const settlementAmt = l.expected - creditAmt;
     const ref = logAction("Credit Note", l.consignee, l.container_no, -creditAmt);
     print("Credit Note", `
       <h2>Credit Note</h2>
       <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
       <p>Container <b>${l.container_no}</b> (${l.size}', ${l.commodity})</p>
-      <p>With reference to the demand notice for accrued CFS charges of ₹${fmt(l.expected)}, and pursuant to commercial settlement at ₹${fmt(finalAmt)}, we hereby issue a credit note for the agreed reduction:</p>
+      <p>With reference to Demand Notice <b>${dnRef}</b> for accrued CFS charges of ₹${fmt(l.expected)}, and pursuant to commercial settlement negotiated at ₹${fmt(settlementAmt)}, we hereby issue this credit note for the agreed reduction:</p>
       <table>
         <tr><th>Particulars</th><th>Amount (₹)</th></tr>
-        <tr><td>Accrued CFS charges per demand notice</td><td>₹${fmt(l.expected)}</td></tr>
-        <tr><td>Agreed settlement amount</td><td>₹${fmt(finalAmt)}</td></tr>
-        <tr><th>Credit to PD account</th><th>₹${fmt(creditAmt)}</th></tr>
+        <tr><td>Accrued CFS charges per demand notice (${dnRef})</td><td>₹${fmt(l.expected)}</td></tr>
+        <tr><td>Agreed settlement amount</td><td>₹${fmt(settlementAmt)}</td></tr>
+        <tr><th>Credit note amount</th><th>₹${fmt(creditAmt)}</th></tr>
       </table>
-      <p>This credit of ₹${fmt(creditAmt)} will be applied to the party's PD account within 3 working days.</p>`, ref);
+      <p>This credit of ₹${fmt(creditAmt)} will be applied to the party's PD account within 3 working days. The net liability of ₹${fmt(settlementAmt)} + GST remains payable against the original demand notice.</p>`, ref);
     setDemandModal(null);
     showToast(`Credit note ${ref} generated & logged`);
   };
@@ -281,59 +284,107 @@ export default function CfsApp({ onSwitch }) {
         </div>
       )}
 
-      {/* ── Demand notice input modal ── */}
+      {/* ── Demand notice / credit note modal (two-step) ── */}
       {demandModal && (
         <div onClick={() => setDemandModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: 12, padding: 28, width: 560, maxHeight: "88vh", overflowY: "auto", border: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>Demand Notice — {demandModal.container_no}</div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 18, ...mono }}>
-              {demandModal.consignee} · {demandModal.size}' {demandModal.cargo_class} · arrived {demandModal.arrival_date} · {demandModal.dwell} days in yard
+
+            {/* step indicator */}
+            <div style={{ display: "flex", gap: 0, marginBottom: 22, borderRadius: 8, overflow: "hidden", border: `1px solid ${C.border}` }}>
+              {[["1", "Demand Notice"], ["2", "Credit Note"]].map(([n, label], i) => {
+                const active = (i === 0 && demandStep === "notice") || (i === 1 && demandStep === "credit");
+                const done = i === 0 && demandStep === "credit";
+                return (
+                  <div key={n} style={{ flex: 1, padding: "8px 14px", background: active ? C.accent + "22" : done ? C.surface : "transparent", borderRight: i === 0 ? `1px solid ${C.border}` : "none", display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 20, height: 20, borderRadius: "50%", background: done ? C.green : active ? C.accent : C.border, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: done || active ? "#000" : C.muted, flexShrink: 0 }}>
+                      {done ? "✓" : n}
+                    </div>
+                    <span style={{ fontSize: 12, color: active ? C.accent : done ? C.green : C.muted, fontWeight: active ? 600 : 400 }}>{label}</span>
+                    {i === 0 && demandStep === "credit" && <span style={{ fontSize: 11, color: C.green, ...mono, marginLeft: "auto" }}>{demandNoticeRef}</span>}
+                  </div>
+                );
+              })}
             </div>
-            <div style={sectionTitle}>Accrued charges</div>
-            {demandModal.billing_lines.map((b, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ color: C.muted }}>{b.label}</span>
-                <span style={mono}>₹{fmt(b.amount)}</span>
-              </div>
-            ))}
-            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "10px 0", color: C.accent, marginBottom: 20 }}>
-              <span>Total accrued</span><span style={mono}>₹{fmt(demandModal.expected)}</span>
+
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16, ...mono }}>
+              {demandModal.container_no} · {demandModal.consignee} · {demandModal.size}' · {demandModal.dwell}d in yard
             </div>
-            <div style={{ background: C.surface, borderRadius: 8, padding: 16, marginBottom: 16 }}>
-              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 8 }}>Final settlement amount</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 15, color: C.muted, ...mono }}>₹</span>
-                <input
-                  type="number"
-                  value={demandFinalAmount}
-                  onChange={e => setDemandFinalAmount(Math.max(0, Number(e.target.value)))}
-                  style={{ flex: 1, padding: "10px 12px", borderRadius: 6, border: `1px solid ${demandFinalAmount > demandModal.expected ? C.red : C.border}`, background: C.card, color: C.text, fontSize: 15, fontFamily: "'Space Mono', monospace", outline: "none" }}
-                />
-              </div>
-              {demandFinalAmount < demandModal.expected && demandFinalAmount > 0 && (
-                <div style={{ marginTop: 8, fontSize: 12, color: C.yellow }}>
-                  Negotiated reduction: ₹{fmt(demandModal.expected - demandFinalAmount)} — a credit note will be raised for this amount.
+
+            {/* ── STEP 1: issue demand notice for full accrued amount ── */}
+            {demandStep === "notice" && <>
+              <div style={sectionTitle}>Accrued charges — full amount to be notified</div>
+              {demandModal.billing_lines.map((b, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <span style={{ color: C.muted }}>{b.label}</span>
+                  <span style={mono}>₹{fmt(b.amount)}</span>
                 </div>
-              )}
-              {demandFinalAmount > demandModal.expected && (
-                <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Amount exceeds total accrued.</div>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button style={{ ...btn, borderColor: C.border, color: C.muted }} onClick={() => setDemandModal(null)}>Cancel</button>
-              {demandFinalAmount > 0 && demandFinalAmount < demandModal.expected && (
-                <button style={{ ...btn, borderColor: C.yellow, color: C.yellow }} onClick={() => issueCreditNote(demandModal, demandFinalAmount)}>
-                  Credit note ₹{fmt(demandModal.expected - demandFinalAmount)} →
+              ))}
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "10px 0", color: C.accent, marginBottom: 8 }}>
+                <span>Total accrued</span><span style={mono}>₹{fmt(demandModal.expected)}</span>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, background: C.surface, borderRadius: 6, padding: "10px 14px", marginBottom: 20 }}>
+                The demand notice will be issued for the <b style={{ color: C.text }}>full accrued amount of ₹{fmt(demandModal.expected)}</b>. If a negotiated settlement is agreed, issue a separate credit note in Step 2.
+              </div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button style={{ ...btn, borderColor: C.border, color: C.muted }} onClick={() => setDemandModal(null)}>Cancel</button>
+                <button style={{ ...btn, background: C.accent + "22", color: C.accent, borderColor: C.accent }}
+                  onClick={() => confirmDemandNotice(demandModal)}>
+                  Issue demand notice ₹{fmt(demandModal.expected)} →
                 </button>
-              )}
-              <button
-                disabled={demandFinalAmount <= 0 || demandFinalAmount > demandModal.expected}
-                style={{ ...btn, background: demandFinalAmount > 0 && demandFinalAmount <= demandModal.expected ? C.accent + "22" : "transparent", color: demandFinalAmount > 0 && demandFinalAmount <= demandModal.expected ? C.accent : C.muted, borderColor: demandFinalAmount > 0 && demandFinalAmount <= demandModal.expected ? C.accent : C.border }}
-                onClick={() => confirmDemandNotice(demandModal, demandFinalAmount)}
-              >
-                Generate demand notice →
-              </button>
-            </div>
+              </div>
+            </>}
+
+            {/* ── STEP 2: optional credit note for negotiated reduction ── */}
+            {demandStep === "credit" && <>
+              <div style={{ background: C.surface, borderRadius: 8, padding: "10px 14px", marginBottom: 20, fontSize: 13 }}>
+                <span style={{ color: C.green }}>✓</span> Demand notice <span style={{ ...mono, color: C.accent }}>{demandNoticeRef}</span> issued for <b>₹{fmt(demandModal.expected)}</b>.
+              </div>
+              <div style={sectionTitle}>Issue credit note for negotiated reduction (optional)</div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
+                If the consignee agreed to pay a lower amount, enter the <b style={{ color: C.text }}>reduction</b> (not the settlement amount). The credit note references the demand notice above.
+              </div>
+              <div style={{ background: C.surface, borderRadius: 8, padding: 16, marginBottom: 8 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 10 }}>Credit note amount (reduction)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 15, color: C.muted, ...mono }}>₹</span>
+                  <input
+                    type="number"
+                    value={creditNoteAmount}
+                    onChange={e => setCreditNoteAmount(e.target.value)}
+                    placeholder="e.g. 200"
+                    style={{ flex: 1, padding: "10px 12px", borderRadius: 6, border: `1px solid ${Number(creditNoteAmount) > demandModal.expected ? C.red : C.border}`, background: C.card, color: C.text, fontSize: 15, fontFamily: "'Space Mono', monospace", outline: "none" }}
+                  />
+                </div>
+                {creditNoteAmount > 0 && Number(creditNoteAmount) < demandModal.expected && (
+                  <div style={{ marginTop: 10, fontSize: 12, display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: C.muted }}>Demand notice total</span><span style={mono}>₹{fmt(demandModal.expected)}</span>
+                  </div>
+                )}
+                {creditNoteAmount > 0 && Number(creditNoteAmount) < demandModal.expected && (
+                  <div style={{ fontSize: 12, display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                    <span style={{ color: C.muted }}>Credit note (reduction)</span><span style={{ ...mono, color: C.yellow }}>− ₹{fmt(Number(creditNoteAmount))}</span>
+                  </div>
+                )}
+                {creditNoteAmount > 0 && Number(creditNoteAmount) < demandModal.expected && (
+                  <div style={{ fontSize: 13, fontWeight: 700, display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}`, color: C.accent }}>
+                    <span>Net payable by consignee</span><span style={mono}>₹{fmt(demandModal.expected - Number(creditNoteAmount))}</span>
+                  </div>
+                )}
+                {Number(creditNoteAmount) > demandModal.expected && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Reduction cannot exceed total accrued.</div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+                <button style={{ ...btn, borderColor: C.border, color: C.muted }} onClick={() => setDemandModal(null)}>Close (no credit note)</button>
+                <button
+                  disabled={!creditNoteAmount || Number(creditNoteAmount) <= 0 || Number(creditNoteAmount) > demandModal.expected}
+                  style={{ ...btn, background: creditNoteAmount && Number(creditNoteAmount) > 0 && Number(creditNoteAmount) <= demandModal.expected ? C.yellow + "22" : "transparent", color: creditNoteAmount && Number(creditNoteAmount) > 0 && Number(creditNoteAmount) <= demandModal.expected ? C.yellow : C.muted, borderColor: creditNoteAmount && Number(creditNoteAmount) > 0 && Number(creditNoteAmount) <= demandModal.expected ? C.yellow : C.border }}
+                  onClick={() => issueCreditNote(demandModal, Number(creditNoteAmount), demandNoticeRef)}
+                >
+                  Issue credit note ₹{creditNoteAmount ? fmt(Number(creditNoteAmount)) : "—"} →
+                </button>
+              </div>
+            </>}
           </div>
         </div>
       )}
@@ -587,6 +638,111 @@ export default function CfsApp({ onSwitch }) {
               ))}
             </div>
 
+            {/* Dwell bucket histogram */}
+            {(() => {
+              const bucketData = [
+                { label: "0–3 (free)", min: 1, max: 3 },
+                { label: "4–7",        min: 4, max: 7 },
+                { label: "8–15",       min: 8, max: 15 },
+                { label: "16–30",      min: 16, max: 30 },
+                { label: "31–60",      min: 31, max: 60 },
+                { label: "61–90",      min: 61, max: 90 },
+                { label: "91+",        min: 91, max: 99999 },
+              ].map(b => {
+                const rows = LEDGER.filter(l => l.direction === "Import" && l.dwell >= b.min && l.dwell <= b.max);
+                const handling = Math.round(rows.reduce((s, l) => s + l.handlingCharged, 0) / 1000);
+                const rent = Math.round(rows.reduce((s, l) => s + l.groundRentCharged, 0) / 1000);
+                return handling + rent > 0 ? { bucket: b.label, Handling: handling, "Ground Rent": rent } : null;
+              }).filter(Boolean);
+              return (
+                <div style={card}>
+                  <div style={sectionTitle}>Revenue composition by dwell bucket — handling vs ground rent (₹K, import)</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                    Fast-clearing buckets are handling-dominated (one-time fee). As dwell extends, ground rent erodes the slot's value — the same slot could have generated a fresh handling fee from the next consignment.
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={bucketData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="bucket" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} />
+                      <YAxis stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} tickFormatter={v => `₹${v}K`} />
+                      <Tooltip
+                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
+                        formatter={(v, name) => [`₹${v}K`, name]}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
+                      <Bar dataKey="Handling" stackId="a" fill={C.accent} radius={[0,0,0,0]} />
+                      <Bar dataKey="Ground Rent" stackId="a" fill={C.yellow} radius={[3,3,0,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })()}
+
+            {/* Escalation Gantt */}
+            {(() => {
+              const maxDays = Math.max(...YARD.map(l => l.dwell)) + 14;
+              const pct = d => `${(d / maxDays * 100).toFixed(2)}%`;
+              return (
+                <div style={card}>
+                  <div style={sectionTitle}>Slab timeline — in-yard containers (colour = tariff slab · white tick = next escalation)</div>
+                  {/* Day markers */}
+                  <div style={{ position: "relative", height: 18, marginLeft: 188, marginRight: 50, marginBottom: 6 }}>
+                    {TARIFF.holding_import.slice(1).map(s => s.from <= maxDays && (
+                      <div key={s.from} style={{ position: "absolute", left: pct(s.from), transform: "translateX(-50%)", fontSize: 9, color: C.muted }}>d{s.from}</div>
+                    ))}
+                    <div style={{ position: "absolute", right: 0, fontSize: 9, color: C.accent }}>TODAY</div>
+                  </div>
+                  {[...YARD].sort((a, b) => b.dwell - a.dwell).map(l => {
+                    const segments = [];
+                    for (let i = 0; i < TARIFF.holding_import.length; i++) {
+                      const slab = TARIFF.holding_import[i];
+                      if (l.dwell < slab.from) break;
+                      const segEnd = Math.min(slab.to === 9999 ? l.dwell : slab.to, l.dwell);
+                      const days = segEnd - slab.from + 1;
+                      if (days > 0) segments.push({ days, color: SLAB_COLORS[i] });
+                    }
+                    const si = l.slabInfo;
+                    return (
+                      <div key={l.container_id} style={{ display: "flex", alignItems: "center", marginBottom: 7 }}>
+                        <div style={{ width: 186, flexShrink: 0, paddingRight: 8 }}>
+                          <div style={{ fontSize: 11, ...mono, color: C.accent, lineHeight: 1.3 }}>{l.container_no}</div>
+                          <div style={{ fontSize: 10, color: C.muted }}>{l.consignee.split(' ').slice(0, 2).join(' ')}</div>
+                        </div>
+                        <div style={{ flex: 1, position: "relative", marginRight: 8 }}>
+                          {/* Slab boundary guides */}
+                          {TARIFF.holding_import.slice(1).map(s => s.from <= maxDays && (
+                            <div key={s.from} style={{ position: "absolute", left: pct(s.from), top: -1, bottom: -1, width: 1, background: "rgba(255,255,255,0.08)", zIndex: 1, pointerEvents: "none" }} />
+                          ))}
+                          {/* Bar */}
+                          <div style={{ width: "100%", height: 16, background: C.surface, borderRadius: 3, overflow: "hidden", display: "flex" }}>
+                            {segments.map((seg, j) => (
+                              <div key={j} style={{ width: pct(seg.days), height: "100%", background: seg.color, opacity: 0.88, flexShrink: 0,
+                                borderRadius: j === 0 ? "3px 0 0 3px" : j === segments.length - 1 && !si?.daysUntilEscalation ? "0 3px 3px 0" : 0 }} />
+                            ))}
+                          </div>
+                          {/* Next escalation tick */}
+                          {si && !si.isMaxSlab && si.daysUntilEscalation != null && (
+                            <div style={{ position: "absolute", left: pct(l.dwell + si.daysUntilEscalation), top: -3, bottom: -3, width: 2, background: "#fff", borderRadius: 1, zIndex: 2, opacity: 0.9 }} />
+                          )}
+                        </div>
+                        <div style={{ width: 42, textAlign: "right", fontSize: 11, ...mono, color: l.dwell > 30 ? C.red : l.dwell > 15 ? C.yellow : C.muted, flexShrink: 0 }}>
+                          {l.dwell}d
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                    {["Free (0–3)","Slab 1","Slab 2","Slab 3","Slab 4","Slab 5","Slab 6","Slab 7","Max (91+)"].map((label, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.muted }}>
+                        <div style={{ width: 12, height: 12, borderRadius: 2, background: SLAB_COLORS[i] }} />
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Escalation tracker */}
             <div style={card}>
               <div style={sectionTitle}>Escalation tracker — slab countdown for in-yard containers</div>
@@ -689,8 +845,15 @@ export default function CfsApp({ onSwitch }) {
                           <td style={{ ...TD, ...mono, textAlign: "right", color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.muted }}>
                             ₹{fmt(r.avgGroundRent)}
                           </td>
-                          <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: r.groundRentShare > 30 ? 700 : 400, color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.green }}>
-                            {r.groundRentShare}%
+                          <td style={{ ...TD, textAlign: "right" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+                              <div style={{ width: 56, height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}>
+                                <div style={{ width: `${Math.min(100, r.groundRentShare)}%`, height: "100%", background: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.green, borderRadius: 3 }} />
+                              </div>
+                              <span style={{ ...mono, fontSize: 12, fontWeight: r.groundRentShare > 30 ? 700 : 400, color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.green, minWidth: 28 }}>
+                                {r.groundRentShare}%
+                              </span>
+                            </div>
                           </td>
                           <td style={{ ...TD, fontSize: 12 }}>
                             {isFast
@@ -745,6 +908,36 @@ export default function CfsApp({ onSwitch }) {
         {/* ── RECOVER — tariff reconciliation & leakage ── */}
         {stage === "recover" && (
           <>
+            {(() => {
+              const causeTotals = {};
+              LEAKS.forEach(l => {
+                const cause = l.leak_reason || "Other";
+                causeTotals[cause] = (causeTotals[cause] || 0) + (-l.variance);
+              });
+              const causeData = Object.entries(causeTotals)
+                .map(([cause, amount]) => ({ cause: cause.length > 38 ? cause.slice(0, 36) + "…" : cause, amount: Math.round(amount) }))
+                .sort((a, b) => b.amount - a.amount);
+              return (
+                <div style={card}>
+                  <div style={sectionTitle}>Leakage by cause (₹) — top undercharge categories</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                    Horizontal bars show cumulative revenue leakage per undercharge category. Address the longest bars first — they represent systematic gaps in the billing process.
+                  </div>
+                  <ResponsiveContainer width="100%" height={Math.max(120, causeData.length * 44 + 40)}>
+                    <BarChart data={causeData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
+                      <XAxis type="number" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} tickFormatter={v => `₹${(v/1000).toFixed(0)}K`} />
+                      <YAxis type="category" dataKey="cause" width={230} stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} />
+                      <Tooltip
+                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
+                        formatter={(v) => [`₹${v.toLocaleString()}`, "Leakage"]}
+                      />
+                      <Bar dataKey="amount" fill={C.red} radius={[0, 4, 4, 0]} opacity={0.85} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })()}
             <div style={card}>
               <div style={sectionTitle}>Tariff reconciliation — billing system vs published tariff</div>
               <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
@@ -885,6 +1078,55 @@ export default function CfsApp({ onSwitch }) {
                 ))}
               </div>
             </div>
+            {(() => {
+              const scatterData = BY_CONSIGNEE
+                .filter(r => r.closedImportBoxes > 0)
+                .map(r => ({ dwell: parseFloat(r.avgDwell), margin: r.marginPct, boxes: r.boxes, name: r.key }));
+              return (
+                <div style={card}>
+                  <div style={sectionTitle}>Margin % vs avg dwell — per consignee (import boxes only)</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                    Each dot = one consignee. Dots in the top-left quadrant (fast clearance, healthy margin) are ideal. Chronic slow clearers drift right — their ground rent share dilutes margin below the 35% floor.
+                  </div>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ScatterChart margin={{ top: 20, right: 30, bottom: 40, left: 10 }}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                      <XAxis type="number" dataKey="dwell" name="Avg Dwell" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }}
+                        label={{ value: "Avg dwell (days)", position: "insideBottom", offset: -24, fill: C.muted, fontSize: 11 }} />
+                      <YAxis type="number" dataKey="margin" name="Margin" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }}
+                        tickFormatter={v => `${v}%`} label={{ value: "Margin %", angle: -90, position: "insideLeft", offset: 10, fill: C.muted, fontSize: 11 }} />
+                      <ReferenceLine x={5} stroke={C.green} strokeDasharray="4 4" label={{ value: "5d target", position: "top", fill: C.green, fontSize: 10 }} />
+                      <ReferenceLine y={35} stroke={C.yellow} strokeDasharray="4 4" label={{ value: "35% floor", position: "right", fill: C.yellow, fontSize: 10 }} />
+                      <Tooltip
+                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const d = payload[0].payload;
+                          return (
+                            <div style={{ background: C.card, border: `1px solid ${C.border}`, padding: "8px 12px", borderRadius: 6, fontSize: 12 }}>
+                              <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.name}</div>
+                              <div style={{ color: C.muted }}>Avg dwell: <span style={mono}>{d.dwell}d</span></div>
+                              <div style={{ color: C.muted }}>Margin: <span style={{ ...mono, color: d.margin < 35 ? C.red : C.green }}>{d.margin}%</span></div>
+                              <div style={{ color: C.muted }}>{d.boxes} boxes</div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Scatter
+                        data={scatterData}
+                        shape={({ cx, cy, payload }) => {
+                          const ok = payload.margin >= 35 && payload.dwell <= 10;
+                          const r = Math.max(5, Math.sqrt(payload.boxes) * 3.5);
+                          return <circle cx={cx} cy={cy} r={r} fill={ok ? C.green : C.red} fillOpacity={0.7} stroke={ok ? C.green : C.red} strokeWidth={1} />;
+                        }}
+                      />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>Dot size ∝ number of boxes handled. Red = below 35% margin floor or above 10-day avg dwell.</div>
+                </div>
+              );
+            })()}
+
             <div style={card}>
               <div style={sectionTitle}>Slot economics by dwell bucket — does ground rent beat throughput?</div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -1023,6 +1265,42 @@ export default function CfsApp({ onSwitch }) {
                   </tbody>
                 </table>
               </div>
+
+              {/* slab step chart */}
+              {(() => {
+                const slabChartData = [];
+                T.holding_import.forEach((slab, i) => {
+                  const days = slab.to === 9999 ? [slab.from, slab.from + 14] : [slab.from, slab.to];
+                  days.forEach(d => {
+                    if (!slabChartData.some(p => p.day === d)) {
+                      slabChartData.push({ day: d, "20'": slab.s20, "40'": slab.s40 });
+                    }
+                  });
+                });
+                slabChartData.sort((a, b) => a.day - b.day);
+                return (
+                  <div style={card}>
+                    <div style={sectionTitle}>Holding slab escalation curve — ₹/day vs dwell (GP class, import)</div>
+                    <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
+                      Step chart shows how the daily ground rent rate jumps at each slab boundary. Days 1–3 are free; after day 91 the rate is capped at the maximum slab.
+                    </div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <LineChart data={slabChartData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
+                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                        <XAxis dataKey="day" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} label={{ value: "Dwell (days)", position: "insideBottom", offset: -2, fill: C.muted, fontSize: 11 }} />
+                        <YAxis stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} tickFormatter={v => `₹${(v/1000).toFixed(0)}K`} />
+                        <Tooltip
+                          contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
+                          formatter={(v, name) => [`₹${v.toLocaleString()}/day`, name]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
+                        <Line type="stepAfter" dataKey="20'" stroke={C.accent} strokeWidth={2} dot={false} />
+                        <Line type="stepAfter" dataKey="40'" stroke={C.red} strokeWidth={2} dot={false} strokeDasharray="5 3" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                );
+              })()}
 
               {/* ancillaries */}
               <div style={card}>
