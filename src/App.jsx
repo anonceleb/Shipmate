@@ -10,26 +10,18 @@ import { JOB_CLIENT_MAP, COMPLIANCE_RISK, WAREHOUSE_STATS, fmt, pct } from "./ut
 import { useClaudeQuery } from "./core/query.js";
 import { LifecycleShell } from "./core/LifecycleShell.jsx";
 
-
+const StageHeader = ({ title, stat }) => (
+  <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+    <h1 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>{title}</h1>
+    {stat && <span style={{ fontSize: 13, color: C.muted, fontFamily: "'Space Mono', monospace" }}>{stat}</span>}
+  </div>
+);
 
 export default function App({ onSwitch }) {
   const [isLightMode, setIsLightMode] = useState(false);
   applyTheme(isLightMode);
 
-  const [activeTab, setActiveTab] = useState("intelligence");
-
-  const CFF_STAGES = [
-    { id: "quote",   label: "Quote",   hint: "price the job — quoting intelligence" },
-    { id: "book",    label: "Book",    hint: "open the job — explore & track" },
-    { id: "operate", label: "Operate", hint: "compliance check & pre-filing" },
-    { id: "bill",    label: "Bill",    hint: "job billing — not yet built", gap: true },
-    { id: "recover", label: "Recover", hint: "duty drawback & filing register" },
-    { id: "settle",  label: "Settle",  hint: "collect payment — not yet built", gap: true },
-  ];
-  const CFF_RAILS = [
-    { id: "intelligence",  label: "Intelligence" },
-    { id: "profitability", label: "Profitability" },
-  ];
+  const [activeTab, setActiveTab] = useState("overview");
 
   const [filterClient, setFilterClient] = useState("All");
   const [filterMode, setFilterMode] = useState("All");
@@ -243,8 +235,32 @@ Use INR formatting for monetary values (include ₹ symbol).`;
     setTimeout(() => setToastMessage(null), 5000);
   };
 
+  // Batch-file every unclaimed drawback claim in one state update — looping
+  // confirmFileClaim-style pushes would drop entries via a stale `filingRegister` closure.
+  const fileAllClaims = () => {
+    const pending = claimsState.filter(c => c.status === "Unclaimed");
+    if (!pending.length) { setToastMessage("All claims already filed"); setTimeout(() => setToastMessage(null), 3000); return; }
+    const filed_date = new Date().toISOString().slice(0, 10);
+    const base = filingRegister.length;
+    const newEntries = pending.map((c, i) => {
+      const cff_fee = Math.round(c.eligible_amount * 0.18);
+      const icegateRef = "ICG" + String(Math.floor(Math.random() * 1e8)).padStart(8, "0");
+      return { register_id: "FR" + String(base + i + 1).padStart(3, "0"), claim_id: c.claim_id, client_id: c.client_id, hs_chapter: c.hs_chapter, eligible_amount: c.eligible_amount, cff_fee, filed_date, icegate_ref: icegateRef, status: "Filed" };
+    });
+    const pendingIds = new Set(pending.map(c => c.claim_id));
+    const nextClaims = claimsState.map(c => pendingIds.has(c.claim_id) ? { ...c, status: "Filed" } : c);
+    const nextRegister = [...filingRegister, ...newEntries];
+    setClaimsState(nextClaims);
+    setFilingRegister(nextRegister);
+    localStorage.setItem("cff_claims", JSON.stringify(nextClaims));
+    localStorage.setItem("cff_filing_register", JSON.stringify(nextRegister));
+    setToastMessage(`${pending.length} claims filed & logged — ₹${fmt(pending.reduce((s, c) => s + c.eligible_amount, 0))} raised`);
+    setTimeout(() => setToastMessage(null), 5000);
+  };
+
   // Summary stats
   const completedJobs = JOBS.filter(j => j.status === "Completed");
+  const inProgressJobs = JOBS.filter(j => j.status === "In Progress");
   const totalRevenue = completedJobs.reduce((s, j) => s + j.revenue, 0);
   const totalCost = completedJobs.reduce((s, j) => s + j.cost, 0);
   const totalMargin = totalRevenue - totalCost;
@@ -253,6 +269,22 @@ Use INR formatting for monetary values (include ₹ symbol).`;
   const unclaimedDrawbacks = claimsState.filter(c => c.status === "Unclaimed");
   const totalUnclaimedDrawback = unclaimedDrawbacks.reduce((s, c) => s + c.eligible_amount, 0);
   const cffFee = Math.round(totalUnclaimedDrawback * 0.18);
+  const highRiskClients = COMPLIANCE_RISK.filter(r => r.level === "High");
+  const sessionRecovered = filingRegister.reduce((s, r) => s + (r.eligible_amount || 0), 0);
+
+  const CFF_STAGES = [
+    { id: "overview", label: "Overview", hint: "why this exists — three numbers", sub: "the business case" },
+    { id: "quote",    label: "Quote",    hint: "price the job — quoting intelligence", sub: `${pipelineArray.length} in pipeline` },
+    { id: "book",     label: "Book",     hint: "open the job — explore & track", sub: `${inProgressJobs.length} in progress` },
+    { id: "operate",  label: "Operate",  hint: "compliance check & pre-filing", sub: `${amendCount} filings amended`, subColor: C.yellow },
+    { id: "bill",     label: "Bill",     hint: "job billing — not yet built", gap: true, sub: "roadmap" },
+    { id: "recover",  label: "Recover",  hint: "duty drawback & filing register", sub: `₹${fmt(totalUnclaimedDrawback)} recoverable`, subColor: C.red },
+    { id: "settle",   label: "Settle",   hint: "collect payment — not yet built", gap: true, sub: "roadmap" },
+  ];
+  const CFF_RAILS = [
+    { id: "intelligence",  label: "Intelligence" },
+    { id: "profitability", label: "Profitability" },
+  ];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif" }}>
@@ -352,18 +384,19 @@ Use INR formatting for monetary values (include ₹ symbol).`;
         rails={[...CFF_RAILS, { id: "schema", label: "Schema" }]}
         active={activeTab}
         onSelect={setActiveTab}
-        stats={[
-          { label: "Total Jobs", value: completedJobs.length, sub: `+ ${JOBS.filter(j=>j.status==="In Progress").length} in progress` },
-          { label: "Revenue (FY)", value: "₹" + fmt(totalRevenue), sub: pct(totalMargin, totalRevenue) + " margin" },
-          { label: "Customs Filings", value: CUSTOMS_FILINGS.length, sub: `${examCount} examinations` },
-          { label: "Amendment Rate", value: pct(amendCount, CUSTOMS_FILINGS.length), sub: `${amendCount} filings amended` },
-        ]}
+        onGapClick={() => { setToastMessage("Roadmap stage — part of the full lifecycle story"); setTimeout(() => setToastMessage(null), 4000); }}
         headerExtra={
-          onSwitch && (
-            <button onClick={onSwitch} style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-              ⇄ Switch demo
-            </button>
-          )
+          <>
+            <div style={{ textAlign: "right", borderLeft: `1px solid ${C.border}`, paddingLeft: 20 }}>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>Recovered this session</div>
+              <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Space Mono', monospace", color: C.green }}>₹{fmt(sessionRecovered)}</div>
+            </div>
+            {onSwitch && (
+              <button onClick={onSwitch} style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                ⇄ Switch demo
+              </button>
+            )}
+          </>
         }
         themeToggle={
           <button
@@ -375,8 +408,44 @@ Use INR formatting for monetary values (include ₹ symbol).`;
           </button>
         }
       >
+        {/* ── OVERVIEW — the business case ── */}
+        {activeTab === "overview" && (
+          <>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 22 }}>
+              <div style={{ fontSize: 13, color: C.muted }}>{JOBS.length} jobs on file · as of {new Date().toISOString().slice(0, 10)}</div>
+              <div style={{ fontSize: 11, color: C.muted, fontFamily: "'Space Mono', monospace" }}>COMBINED FREIGHT FORWARDERS · SYNTHETIC DATA</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 36 }}>
+              <div style={{ background: C.card, border: `1px solid ${C.red}`, borderRadius: 14, padding: 26 }}>
+                <div style={{ fontSize: 11, color: C.red, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, fontFamily: "'Space Mono', monospace" }}>Recoverable duty drawback</div>
+                <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "'Space Mono', monospace", color: C.red }}>₹{fmt(totalUnclaimedDrawback)}</div>
+                <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>{unclaimedDrawbacks.length} of {claimsState.length} claims · CFF fee ₹{fmt(cffFee)} at 18%</div>
+                <button onClick={() => setActiveTab("recover")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.red}`, background: "transparent", color: C.red, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Recover it →</button>
+              </div>
+              <div style={{ background: C.card, border: `1px solid ${C.yellow}`, borderRadius: 14, padding: 26 }}>
+                <div style={{ fontSize: 11, color: C.yellow, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, fontFamily: "'Space Mono', monospace" }}>Jobs in progress</div>
+                <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "'Space Mono', monospace", color: C.yellow }}>{inProgressJobs.length}</div>
+                <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>{examCount} examinations · {amendCount} amendments this FY</div>
+                <button onClick={() => setActiveTab("book")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.yellow}`, background: "transparent", color: C.yellow, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Manage jobs →</button>
+              </div>
+              <div style={{ background: C.card, border: `1px solid ${C.accent}`, borderRadius: 14, padding: 26 }}>
+                <div style={{ fontSize: 11, color: C.accent, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, fontFamily: "'Space Mono', monospace" }}>Compliance risk</div>
+                <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "'Space Mono', monospace", color: C.accent }}>{highRiskClients.length} <span style={{ fontSize: 16, color: C.muted, fontWeight: 400 }}>clients</span></div>
+                <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>weighted score ≥ 60 — examination + amendment rate</div>
+                <button onClick={() => setActiveTab("operate")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Check compliance →</button>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 28, flexWrap: "wrap", borderTop: `1px solid ${C.border}`, paddingTop: 18, fontSize: 13, color: C.muted, fontFamily: "'Space Mono', monospace" }}>
+              <span>{completedJobs.length} jobs · FY</span>
+              <span>₹{fmt(totalRevenue)} invoiced</span>
+              <span>₹{fmt(totalMargin)} margin</span>
+            </div>
+          </>
+        )}
+
         {activeTab === "intelligence" && (
           <>
+            <StageHeader title="Ask the data" />
             {/* SAMPLE QUESTIONS */}
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 10 }}>Try a sample question</div>
@@ -441,9 +510,8 @@ Use INR formatting for monetary values (include ₹ symbol).`;
                   <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>Answer</div>
                   <div style={{ fontSize: 15, lineHeight: 1.6 }}>{result.summary}</div>
                   {result.insight && (
-                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}`, fontSize: 12, color: C.accent, display: "flex", gap: 8, alignItems: "flex-start" }}>
-                      <span style={{ marginTop: 1 }}>💡</span>
-                      <span>{result.insight}</span>
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}`, fontSize: 12, color: C.accent }}>
+                      {result.insight}
                     </div>
                   )}
                 </div>
@@ -481,26 +549,13 @@ Use INR formatting for monetary values (include ₹ symbol).`;
                     </div>
                   </div>
                 )}
-
-                {/* SQL */}
-                {result.sql && (
-                  <details style={{ cursor: "pointer" }}>
-                    <summary style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", padding: "8px 0", userSelect: "none" }}>
-                      View Generated SQL ▸
-                    </summary>
-                    <pre style={{ margin: "8px 0 0 0", padding: "14px 16px", background: C.surface,
-                      borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12,
-                      fontFamily: "'Space Mono', monospace", color: "#7EC8A4", overflowX: "auto", lineHeight: 1.6 }}>
-                      {result.sql}
-                    </pre>
-                  </details>
-                )}
               </div>
             )}
           </>
         )}
         {activeTab === "profitability" && (
           <>
+            <StageHeader title="Profitability" stat={`${pct(totalMargin, totalRevenue)} blended margin · ${completedJobs.length} jobs`} />
             <ProfitabilityTab onSelectClient={openScorecard} />
             <ChartsTab onSelectClient={openScorecard} />
             <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 4, marginTop: 4 }}>
@@ -531,6 +586,7 @@ Use INR formatting for monetary values (include ₹ symbol).`;
         )}
         {activeTab === "book" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+            <StageHeader title="Open jobs" stat={`${inProgressJobs.length} in progress · ${JOBS.length} total on file`} />
             {/* In Progress Tracker */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
               {JOBS.filter(j => j.status === "In Progress").map(job => {
@@ -618,13 +674,14 @@ Use INR formatting for monetary values (include ₹ symbol).`;
 
             {/* ── DUTY DRAWBACK ── */}
             <section>
-              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12 }}>Duty Drawback</div>
-              
-              {/* Part A: Alert */}
-              <div style={{ background: C.accentDim, borderRadius: 10, padding: 24, marginBottom: 24, border: `1px solid ${C.accent}40`, textAlign: "center" }}>
-                <div style={{ color: C.accent, fontSize: 12, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8, fontWeight: 600 }}>Recoverable Duty Drawback — Action Required</div>
-                <div style={{ fontSize: 32, fontWeight: 700, fontFamily: "'Space Mono', monospace", color: C.accent, marginBottom: 8 }}>₹{fmt(totalUnclaimedDrawback)}</div>
-                <div style={{ fontSize: 13, color: C.text }}>CFF fee at 18% contingency: <span style={{ color: C.green }}>₹{fmt(cffFee)}</span></div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 24, flexWrap: "wrap", marginBottom: 22 }}>
+                <StageHeader title="Duty drawback" stat={`₹${fmt(totalUnclaimedDrawback)} · ${unclaimedDrawbacks.length} of ${claimsState.length} claims · fee ₹${fmt(cffFee)} at 18%`} />
+                <button
+                  onClick={fileAllClaims}
+                  style={{ padding: "12px 22px", borderRadius: 9, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 14, flexShrink: 0, fontFamily: "inherit" }}
+                >
+                  {unclaimedDrawbacks.length ? `File all ${unclaimedDrawbacks.length} claims · ₹${fmt(totalUnclaimedDrawback)} →` : "All claims filed ✓"}
+                </button>
               </div>
 
               {/* Part B: Table */}
@@ -687,12 +744,20 @@ Use INR formatting for monetary values (include ₹ symbol).`;
 
             {/* ── FILING REGISTER ───────────────────────────────────────────── */}
             {filingRegister.length > 0 && (
-              <section style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 24 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 4 }}>Filing Register</div>
-                    <div style={{ fontSize: 13, color: C.text }}>{filingRegister.length} claim{filingRegister.length !== 1 ? "s" : ""} filed this session</div>
+              <section>
+                <StageHeader title="Filing register" stat={`${filingRegister.length} claim${filingRegister.length !== 1 ? "s" : ""} filed · ₹${fmt(sessionRecovered)} raised this session`} />
+                <div style={{ display: "flex", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
+                  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 22px", minWidth: 180 }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>Recoverable filed</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'Space Mono', monospace", marginTop: 5, color: C.green }}>₹{fmt(sessionRecovered)}</div>
                   </div>
+                  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 22px", minWidth: 180 }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>CFF fee earned</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'Space Mono', monospace", marginTop: 5, color: C.text }}>₹{fmt(filingRegister.reduce((s, r) => s + (r.cff_fee || 0), 0))}</div>
+                  </div>
+                </div>
+                <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 16 }}>
                   <div style={{ display: "flex", gap: 8 }}>
                   <button
                     onClick={() => {
@@ -748,6 +813,7 @@ Use INR formatting for monetary values (include ₹ symbol).`;
                     </tbody>
                   </table>
                 </div>
+                </div>
               </section>
             )}
 
@@ -756,6 +822,7 @@ Use INR formatting for monetary values (include ₹ symbol).`;
         {/* ── OPERATE — compliance check & pre-filing ── */}
         {activeTab === "operate" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+            <StageHeader title="Compliance check" stat={`${amendCount} filings amended · ${examCount} examinations · Section 48 track`} />
             {/* ── AMENDMENT PREVENTION CHECK ── */}
             <section>
               <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12 }}>Amendment Prevention Check</div>
@@ -966,6 +1033,8 @@ Use INR formatting for monetary values (include ₹ symbol).`;
         )}
         {/* ── QUOTE — quoting intelligence ── */}
         {activeTab === "quote" && (
+          <>
+          <StageHeader title="Quoting intelligence" stat={`${pipelineArray.length} in pipeline`} />
           <div style={{ display: "flex", gap: 24 }}>
             {/* Left Panel: RFQ Input */}
             <div style={{ width: "40%", background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 24, alignSelf: "flex-start" }}>
@@ -1200,6 +1269,7 @@ Use INR formatting for monetary values (include ₹ symbol).`;
 
             </div>
           </div>
+          </>
         )}
         {activeTab === "schema" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
