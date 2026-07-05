@@ -31,10 +31,21 @@ export function useRegister(storageKey, makeRef) {
     return ref;
   };
 
+  // Appends several entries in one state update — push() alone loses data
+  // when called repeatedly in the same synchronous batch (stale `register` closure).
+  const pushMany = (fieldsList) => {
+    const base = register.length;
+    const built = fieldsList.map((fields, i) => ({ ref: makeRef(base + i + 1, fields), date: TODAY, ...fields }));
+    const next = [...built.reverse(), ...register];
+    setRegister(next);
+    localStorage.setItem(storageKey, JSON.stringify(next));
+    return built.map(b => b.ref);
+  };
+
   const clear = () => {
     setRegister([]);
     localStorage.removeItem(storageKey);
   };
 
-  return [register, push, clear];
+  return [register, push, clear, pushMany];
 }

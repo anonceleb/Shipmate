@@ -1,9 +1,9 @@
 import { useState, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ScatterChart, Scatter, ReferenceLine, LineChart, Line } from "recharts";
 import { C, applyTheme } from "../data/constants.js";
-import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF, TARIFF_REVISION } from "./constants.js";
+import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF } from "./constants.js";
 import {
-  fmt, TODAY, MANALI_CAPACITY, bucketOf, getComputations,
+  fmt, TODAY, MANALI_CAPACITY, getComputations,
 } from "./computations.js";
 import { buildPrintableHtml } from "../core/artifacts.js";
 import { useRegister } from "../core/register.js";
@@ -31,21 +31,20 @@ const TERMINALS = [
 
 // ── shared style tokens ───────────────────────────────────────────────────────
 const card = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 };
-const TH = { textAlign: "left", padding: "8px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` };
-const TD = { padding: "8px 10px", fontSize: 13, borderBottom: `1px solid ${C.border}` };
+const TH = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` };
+const TD = { padding: "10px 10px", fontSize: 14, borderBottom: `1px solid ${C.border}` };
 const mono = { fontFamily: "'Space Mono', monospace" };
 const btn = { padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: "inherit" };
 const sectionTitle = { fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 10 };
 const SLAB_COLORS = ["#22c55e","#84cc16","#eab308","#fb923c","#f97316","#ef4444","#dc2626","#b91c1c","#7f1d1d"];
+const MARGIN_FLOOR = 35;
 
-const STAGES = [
-  { id: "quote",   label: "Quote",   hint: "commercial repricing — accounts below margin floor" },
-  { id: "book",    label: "Book",    hint: "gate-in — not yet tracked", gap: true },
-  { id: "operate", label: "Operate", hint: "yard & dwell tracking" },
-  { id: "bill",    label: "Bill",    hint: "demand notices & long-stay escalation" },
-  { id: "recover", label: "Recover", hint: "tariff reconciliation & leakage recovery" },
-  { id: "settle",  label: "Settle",  hint: "collect payment — not yet built", gap: true },
-];
+const StageHeader = ({ title, stat }) => (
+  <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+    <h1 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>{title}</h1>
+    {stat && <span style={{ fontSize: 13, color: C.muted, fontFamily: "'Space Mono', monospace" }}>{stat}</span>}
+  </div>
+);
 
 export default function CfsApp({ onSwitch }) {
   const [isLightMode, setIsLightMode] = useState(false);
@@ -64,11 +63,12 @@ export default function CfsApp({ onSwitch }) {
   const {
     LEDGER, LEAKS, TOTAL_LEAKAGE, YARD, YARD_ACCRUED, LONG_STAY,
     BY_CONSIGNEE, BY_CHA, BY_CLASS, BY_PORT, SLOT_ECONOMICS, MONTHLY_THROUGHPUT,
-    TOTALS, DWELL_SUMMARY,
+    TOTALS,
   } = getComputations(terminal.abbr, rateOverrides);
 
-  const [stage, setStage] = useState("operate");
+  const [stage, setStage] = useState("overview");
   const [toast, setToast] = useState(null);
+  const [issued, setIssued] = useState({});
   const [detail, setDetail] = useState(null);
   const [printDoc, setPrintDoc] = useState(null);
   const [demandModal, setDemandModal] = useState(null);
@@ -128,11 +128,15 @@ export default function CfsApp({ onSwitch }) {
   const makeRef = (n, { type }, abbr) =>
     `${abbr}/${type.split(" ")[0].toUpperCase()}/${String(n).padStart(4, "0")}`;
 
-  const [reg0, push0, clear0] = useRegister("nexus_action_register",  (n, f) => makeRef(n, f, "NXS"));
-  const [reg1, push1, clear1] = useRegister("balmer_action_register",   (n, f) => makeRef(n, f, "BCT"));
+  const [reg0, push0, clear0, pushMany0] = useRegister("nexus_action_register",  (n, f) => makeRef(n, f, "NXS"));
+  const [reg1, push1, clear1, pushMany1] = useRegister("balmer_action_register",   (n, f) => makeRef(n, f, "BCT"));
   const register      = termIdx === 0 ? reg0  : reg1;
   const pushToRegister = termIdx === 0 ? push0 : push1;
   const clearRegister  = termIdx === 0 ? clear0 : clear1;
+  const pushManyToRegister = termIdx === 0 ? pushMany0 : pushMany1;
+
+  const markIssued = id => setIssued(prev => ({ ...prev, [terminal.abbr + id]: true }));
+  const isIssued = id => !!issued[terminal.abbr + id];
 
   const print = (title, bodyHtml, refNo) => {
     setPrintDoc({ title, html: buildPrintableHtml(terminal, title, bodyHtml, refNo) });
@@ -161,18 +165,34 @@ export default function CfsApp({ onSwitch }) {
     pushToRegister({ type, party, container_no, amount });
 
   // ── artifact actions ──────────────────────────────────────────────────────
-  const issueDebitNote = l => {
+  const issueDebitNote = (l, silent) => {
     const ref = logAction("Debit Note", l.consignee, l.container_no, -l.variance);
-    print("Supplementary Debit Note", `
-      <h2>Supplementary Debit Note</h2>
-      <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
-      <p>Re: Container <b>${l.container_no}</b> (${l.size}', ${l.cargo_class}, ex-${l.port}) — gate-in ${l.arrival_date}.</p>
-      <p>On reconciliation of charges against our published tariff (effective 15-06-2023), the following shortfall was identified:</p>
-      <table><tr><th>Particulars</th><th>Amount (₹)</th></tr>
-      <tr><td>${l.leak_reason}</td><td>${fmt(-l.variance)}</td></tr>
-      <tr><th>Total payable</th><th>₹${fmt(-l.variance)} + GST as applicable</th></tr></table>
-      <p>Kindly arrange payment through your PD account within 7 days.</p>`, ref);
-    showToast(`Debit note ${ref} generated & logged`);
+    markIssued(l.container_id);
+    if (!silent) {
+      print("Supplementary Debit Note", `
+        <h2>Supplementary Debit Note</h2>
+        <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
+        <p>Re: Container <b>${l.container_no}</b> (${l.size}', ${l.cargo_class}, ex-${l.port}) — gate-in ${l.arrival_date}.</p>
+        <p>On reconciliation of charges against our published tariff (effective 15-06-2023), the following shortfall was identified:</p>
+        <table><tr><th>Particulars</th><th>Amount (₹)</th></tr>
+        <tr><td>${l.leak_reason}</td><td>${fmt(-l.variance)}</td></tr>
+        <tr><th>Total payable</th><th>₹${fmt(-l.variance)} + GST as applicable</th></tr></table>
+        <p>Kindly arrange payment through your PD account within 7 days.</p>`, ref);
+      showToast(`Debit note ${ref} generated & logged`);
+    }
+    return ref;
+  };
+
+  const issueAllDebitNotes = () => {
+    const pending = LEAKS.filter(l => !isIssued(l.container_id));
+    if (!pending.length) { showToast("All debit notes already issued"); return; }
+    pushManyToRegister(pending.map(l => ({ type: "Debit Note", party: l.consignee, container_no: l.container_no, amount: -l.variance })));
+    setIssued(prev => {
+      const next = { ...prev };
+      pending.forEach(l => { next[terminal.abbr + l.container_id] = true; });
+      return next;
+    });
+    showToast(`${pending.length} debit notes generated & logged — ₹${fmt(pending.reduce((s, l) => s - l.variance, 0))} raised`);
   };
 
   const issueDemandNotice = l => {
@@ -244,18 +264,28 @@ export default function CfsApp({ onSwitch }) {
       <tr><td>Allocated cost</td><td>₹${fmt(row.cost)}</td></tr>
       <tr><td>Margin</td><td>₹${fmt(row.margin)} (${row.marginPct}%)</td></tr>
       <tr><td>Average dwell</td><td>${row.avgDwell} days</td></tr></table>
-      <p>Recommendation: ${row.marginPct < 35 ? "renegotiate volume discount / apply surcharges on actuals — account margin is below the 35% contribution floor." : "margin healthy; protect account with volume-discount renewal."}</p>`, ref);
+      <p>Recommendation: ${row.marginPct < MARGIN_FLOOR ? `renegotiate volume discount / apply surcharges on actuals — account margin is below the ${MARGIN_FLOOR}% contribution floor.` : "margin healthy; protect account with volume-discount renewal."}</p>`, ref);
     showToast(`Repricing memo ${ref} generated & logged`);
   };
 
   const yardUtilPct = Math.round((TOTALS.teu / MANALI_CAPACITY) * 100 * 12);
 
-  const stats = [
-    { label: "Boxes (11 mo)", value: `${TOTALS.boxes}`, sub: `${TOTALS.teu} TEU handled` },
-    { label: "Revenue", value: "₹" + fmt(TOTALS.revenue), sub: `₹${fmt(TOTALS.margin)} margin` },
-    { label: "Leakage found", value: "₹" + fmt(TOTAL_LEAKAGE), sub: `${LEAKS.length} undercharged boxes`, hot: true },
-    { label: "In yard now", value: `${YARD.length}`, sub: `₹${fmt(YARD_ACCRUED)} accrued` },
-    { label: "Long-stay (>30d)", value: `${LONG_STAY.length}`, sub: "Section 48 candidates", hot: LONG_STAY.length > 0 },
+  const belowFloor = BY_CONSIGNEE.filter(r => r.marginPct < MARGIN_FLOOR);
+  const sessionRecovered = register
+    .filter(r => r.type === "Debit Note" || r.type === "Demand Notice")
+    .reduce((s, r) => s + (r.amount || 0), 0);
+  const nextEsc = YARD
+    .filter(l => l.slabInfo && !l.slabInfo.isMaxSlab && l.slabInfo.daysUntilEscalation != null)
+    .sort((a, b) => a.slabInfo.daysUntilEscalation - b.slabInfo.daysUntilEscalation)[0];
+
+  const STAGES = [
+    { id: "overview", label: "Overview", hint: "why this exists — three numbers", sub: "the business case" },
+    { id: "quote",    label: "Quote",    hint: "commercial repricing — accounts below margin floor", sub: `${belowFloor.length} accts below floor` },
+    { id: "book",     label: "Book",     hint: "gate-in — not yet tracked", gap: true, sub: "roadmap" },
+    { id: "operate",  label: "Operate",  hint: "yard & dwell tracking", sub: `₹${fmt(YARD_ACCRUED)} accruing`, subColor: C.yellow },
+    { id: "bill",     label: "Bill",     hint: "demand notices & long-stay escalation", sub: `${LONG_STAY.length} boxes past 30d` },
+    { id: "recover",  label: "Recover",  hint: "tariff reconciliation & leakage recovery", sub: `₹${fmt(TOTAL_LEAKAGE)} found`, subColor: C.red },
+    { id: "settle",   label: "Settle",   hint: "collect payment — not yet built", gap: true, sub: "roadmap" },
   ];
 
   return (
@@ -471,25 +501,31 @@ export default function CfsApp({ onSwitch }) {
           { id: "intelligence",  label: "Intelligence" },
           { id: "profitability", label: "Profitability" },
           { id: "ratecard",      label: "Rate Card" },
-          { id: "register",      label: `Register (${register.length})` },
+          { id: "register",      label: `Register · ${register.length} artifact${register.length === 1 ? "" : "s"}` },
         ]}
         active={stage}
         onSelect={setStage}
-        stats={stats}
+        onGapClick={() => showToast("Roadmap stage — part of the full lifecycle story")}
         headerExtra={
           <>
-            <div style={{ display: "flex", gap: 4 }}>
-              {TERMINALS.map((t, i) => (
-                <button key={i} onClick={() => setTermIdx(i)} style={{
-                  padding: "5px 11px", borderRadius: 6, fontSize: 11, cursor: "pointer", fontFamily: "inherit",
-                  border: `1px solid ${i === termIdx ? t.color : C.border}`,
-                  background: i === termIdx ? t.color + "22" : "transparent",
-                  color: i === termIdx ? t.color : C.muted,
-                  textTransform: "uppercase", letterSpacing: "0.5px",
-                }}>
-                  {t.abbr}
-                </button>
-              ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px" }}>Terminal</span>
+              <div style={{ display: "flex", gap: 4 }}>
+                {TERMINALS.map((t, i) => (
+                  <button key={i} onClick={() => setTermIdx(i)} title={t.label} style={{
+                    padding: "6px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+                    border: `1px solid ${i === termIdx ? t.color : C.border}`,
+                    background: i === termIdx ? t.color + "22" : "transparent",
+                    color: i === termIdx ? t.color : C.muted,
+                  }}>
+                    {t.label.split(" ")[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ textAlign: "right", borderLeft: `1px solid ${C.border}`, paddingLeft: 20 }}>
+              <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>Recovered this session</div>
+              <div style={{ fontSize: 20, fontWeight: 700, ...mono, color: C.green }}>₹{fmt(sessionRecovered)}</div>
             </div>
             <button onClick={onSwitch} style={{ padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
               ⇄ Switch demo
@@ -507,14 +543,50 @@ export default function CfsApp({ onSwitch }) {
         }
       >
 
+        {/* ── OVERVIEW — the business case ── */}
+        {stage === "overview" && (() => {
+          const leakPct = ((TOTAL_LEAKAGE / TOTALS.revenue) * 100).toFixed(1);
+          const leakAnnual = Math.round((TOTAL_LEAKAGE / TOTALS.teu) * MANALI_CAPACITY);
+          return (
+            <>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 22 }}>
+                <div style={{ fontSize: 13, color: C.muted }}>{TOTALS.boxes} boxes reconciled against published tariff · as of {TODAY}</div>
+                <div style={{ fontSize: 11, color: C.muted, ...mono }}>OVERLAY ON EXISTING YARD &amp; BILLING SYSTEMS · SYNTHETIC DATA</div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 36 }}>
+                <div style={{ background: C.card, border: `1px solid ${C.red}`, borderRadius: 14, padding: 26 }}>
+                  <div style={{ fontSize: 11, color: C.red, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, ...mono }}>Revenue leakage</div>
+                  <div style={{ fontSize: 34, fontWeight: 700, ...mono, color: C.red }}>₹{fmt(TOTAL_LEAKAGE)}</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>{LEAKS.length} of {TOTALS.boxes} boxes · {leakPct}% of revenue · ≈₹{fmt(leakAnnual)}/yr at {fmt(MANALI_CAPACITY)} TEU</div>
+                  <button onClick={() => setStage("recover")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.red}`, background: "transparent", color: C.red, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Recover it →</button>
+                </div>
+                <div style={{ background: C.card, border: `1px solid ${C.yellow}`, borderRadius: 14, padding: 26 }}>
+                  <div style={{ fontSize: 11, color: C.yellow, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, ...mono }}>Accruing in yard now</div>
+                  <div style={{ fontSize: 34, fontWeight: 700, ...mono, color: C.yellow }}>₹{fmt(YARD_ACCRUED)}</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>{YARD.length} in yard · {LONG_STAY.length} past 30d · {nextEsc ? `next escalation in ${nextEsc.slabInfo.daysUntilEscalation}d` : "no escalations pending"}</div>
+                  <button onClick={() => setStage("operate")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.yellow}`, background: "transparent", color: C.yellow, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Manage dwell →</button>
+                </div>
+                <div style={{ background: C.card, border: `1px solid ${C.accent}`, borderRadius: 14, padding: 26 }}>
+                  <div style={{ fontSize: 11, color: C.accent, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, ...mono }}>Accounts below floor</div>
+                  <div style={{ fontSize: 34, fontWeight: 700, ...mono, color: C.accent }}>{belowFloor.length} <span style={{ fontSize: 16, color: C.muted, fontWeight: 400 }}>accounts</span></div>
+                  <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>under {MARGIN_FLOOR}% contribution after activity-based cost allocation</div>
+                  <button onClick={() => setStage("quote")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Reprice →</button>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 28, flexWrap: "wrap", borderTop: `1px solid ${C.border}`, paddingTop: 18, fontSize: 13, color: C.muted, ...mono }}>
+                <span>{TOTALS.teu} TEU · 11 mo</span>
+                <span>₹{fmt(TOTALS.revenue)} invoiced</span>
+                <span>₹{fmt(TOTALS.margin)} margin</span>
+              </div>
+            </>
+          );
+        })()}
+
         {/* ── QUOTE — commercial repricing ── */}
         {stage === "quote" && (
           <>
+            <StageHeader title="Repricing review" stat={`${belowFloor.length} of ${BY_CONSIGNEE.length} accounts below ${MARGIN_FLOOR}% floor`} />
             <div style={card}>
-              <div style={sectionTitle}>Accounts for repricing review — below 35% contribution margin</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                Activity-based cost allocation against invoiced revenue per consignee. Accounts below the 35% floor indicate volume-discount erosion, stale rate cards, or adverse cargo mix — generate a repricing memo to initiate renegotiation.
-              </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
                   <th style={TH}>Consignee</th>
@@ -531,39 +603,14 @@ export default function CfsApp({ onSwitch }) {
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.boxes}</td>
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.revenue)}</td>
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.cost)}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right", color: r.marginPct < 35 ? C.red : C.green, fontWeight: r.marginPct < 35 ? 700 : 400 }}>{r.marginPct}%</td>
+                    <td style={{ ...TD, ...mono, textAlign: "right", color: r.marginPct < MARGIN_FLOOR ? C.red : C.green, fontWeight: r.marginPct < MARGIN_FLOOR ? 700 : 400 }}>{r.marginPct}%</td>
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.avgDwell}d</td>
                     <td style={{ ...TD, textAlign: "right" }}>
-                      {r.marginPct < 35 && <button style={btn} onClick={() => issueRepricingMemo(r)}>Repricing memo →</button>}
+                      {r.marginPct < MARGIN_FLOOR && <button style={btn} onClick={() => issueRepricingMemo(r)}>Repricing memo →</button>}
                     </td>
                   </tr>
                 ))}</tbody>
               </table>
-            </div>
-            <div style={card}>
-              <div style={sectionTitle}>Rate revision exhibit — 2023 tariff vs current published sheet (Chennai Port, GP)</div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>
-                  <th style={TH}>Service</th>
-                  <th style={{ ...TH, textAlign: "right" }}>20' (2023)</th>
-                  <th style={{ ...TH, textAlign: "right" }}>20' (current)</th>
-                  <th style={{ ...TH, textAlign: "right" }}>40' (2023)</th>
-                  <th style={{ ...TH, textAlign: "right" }}>40' (current)</th>
-                </tr></thead>
-                <tbody>
-                  {[["Load-out delivery", TARIFF.handling_import.Chennai.GP.loadout, TARIFF_REVISION.handling_import_chennai_GP.loadout],
-                    ["De-stuffing service", TARIFF.handling_import.Chennai.GP.destuff, TARIFF_REVISION.handling_import_chennai_GP.destuff]].map(([label, old, nw]) => (
-                    <tr key={label}>
-                      <td style={TD}>{label}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(old.s20)}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right", color: C.green }}>₹{fmt(nw.s20)} <span style={{ fontSize: 11, color: C.muted }}>(+{Math.round((nw.s20 / old.s20 - 1) * 100)}%)</span></td>
-                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(old.s40)}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right", color: C.green }}>₹{fmt(nw.s40)} <span style={{ fontSize: 11, color: C.muted }}>(+{Math.round((nw.s40 / old.s40 - 1) * 100)}%)</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>If any box was billed on the old sheet after the revision date, the reconciliation engine flags it — the same diff that catches slab errors catches stale rate cards.</div>
             </div>
           </>
         )}
@@ -571,120 +618,18 @@ export default function CfsApp({ onSwitch }) {
         {/* ── OPERATE — yard & dwell ── */}
         {stage === "operate" && (
           <>
-            {/* Yard snapshot */}
-            <div style={card}>
-              <div style={sectionTitle}>Containers in yard — ground rent accruing daily (as of {TODAY})</div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>
-                  <th style={TH}>Container</th><th style={TH}>Consignee / CHA</th><th style={TH}>Cargo</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Dwell</th><th style={TH}>Slab today</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Accrued</th><th style={TH}></th>
-                </tr></thead>
-                <tbody>{YARD.map(l => {
-                  const b = bucketOf(l.dwell);
-                  const slabColor = l.dwell <= 3 ? C.green : l.dwell <= 15 ? C.yellow : C.red;
-                  return (
-                    <tr key={l.container_id}>
-                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
-                      <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
-                      <td style={{ ...TD, fontSize: 12 }}>{l.commodity}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: slabColor }}>{l.dwell}d</td>
-                      <td style={{ ...TD, fontSize: 12, color: slabColor }}>{b?.label}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
-                      <td style={{ ...TD, textAlign: "right" }}>
-                        {l.dwell > 3 && <button style={btn} onClick={() => issueDemandNotice(l)}>Demand notice →</button>}
-                      </td>
-                    </tr>
-                  );
-                })}</tbody>
-              </table>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
-                Aging mirrors the published holding slabs — 3 free days, then ₹500/day (20') escalating to ₹5,000/day from day 91 (40' = 2×). Click a container for the itemised charge sheet.
-              </div>
-            </div>
+            <StageHeader
+              title="Yard & dwell"
+              stat={`${YARD.length} in yard · ₹${fmt(YARD_ACCRUED)} accrued` + (nextEsc ? ` · next escalation ${nextEsc.slabInfo.daysUntilEscalation}d (${nextEsc.container_no})` : "")}
+            />
 
-            {/* ── DWELL OPTIMISATION ── */}
-            <div style={{ borderTop: `2px solid ${C.border}`, margin: "4px 0 20px", position: "relative" }}>
-              <span style={{ position: "absolute", top: -10, left: 0, background: C.bg, paddingRight: 12, fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "1px" }}>Dwell Optimisation</span>
-            </div>
-
-            {/* Summary chips */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 20 }}>
-              {[
-                {
-                  label: "Closed boxes cleared ≤5 days",
-                  value: `${DWELL_SUMMARY.pctCleared5d}%`,
-                  sub: "target: >70% — handling trumps ground rent",
-                  hot: DWELL_SUMMARY.pctCleared5d < 70,
-                },
-                {
-                  label: "Ground rent share of revenue",
-                  value: `${DWELL_SUMMARY.groundRentShareOfTotal}%`,
-                  sub: `₹${fmt(DWELL_SUMMARY.totalGroundRentRevenue)} earned — slot cost not captured`,
-                  hot: DWELL_SUMMARY.groundRentShareOfTotal > 20,
-                },
-                {
-                  label: "Escalations within 5 days",
-                  value: `${DWELL_SUMMARY.nudgeCount}`,
-                  sub: "containers crossing to next slab this week",
-                  hot: DWELL_SUMMARY.nudgeCount > 0,
-                },
-              ].map(s => (
-                <div key={s.label} style={{ background: C.surface, border: `1px solid ${s.hot ? C.red : C.border}`, borderRadius: 8, padding: 14 }}>
-                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.7px" }}>{s.label}</div>
-                  <div style={{ fontSize: 24, fontWeight: 700, ...mono, marginTop: 6, color: s.hot ? C.red : C.text }}>{s.value}</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{s.sub}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Dwell bucket histogram */}
-            {(() => {
-              const bucketData = [
-                { label: "0–3 (free)", min: 1, max: 3 },
-                { label: "4–7",        min: 4, max: 7 },
-                { label: "8–15",       min: 8, max: 15 },
-                { label: "16–30",      min: 16, max: 30 },
-                { label: "31–60",      min: 31, max: 60 },
-                { label: "61–90",      min: 61, max: 90 },
-                { label: "91+",        min: 91, max: 99999 },
-              ].map(b => {
-                const rows = LEDGER.filter(l => l.direction === "Import" && l.dwell >= b.min && l.dwell <= b.max);
-                const handling = Math.round(rows.reduce((s, l) => s + l.handlingCharged, 0) / 1000);
-                const rent = Math.round(rows.reduce((s, l) => s + l.groundRentCharged, 0) / 1000);
-                return handling + rent > 0 ? { bucket: b.label, Handling: handling, "Ground Rent": rent } : null;
-              }).filter(Boolean);
-              return (
-                <div style={card}>
-                  <div style={sectionTitle}>Revenue composition by dwell bucket — handling vs ground rent (₹K, import)</div>
-                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                    Fast-clearing buckets are handling-dominated (one-time fee). As dwell extends, ground rent erodes the slot's value — the same slot could have generated a fresh handling fee from the next consignment.
-                  </div>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={bucketData} margin={{ top: 10, right: 20, left: 10, bottom: 5 }}>
-                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="bucket" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} />
-                      <YAxis stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} tickFormatter={v => `₹${v}K`} />
-                      <Tooltip
-                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
-                        formatter={(v, name) => [`₹${v}K`, name]}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 12, color: C.muted }} />
-                      <Bar dataKey="Handling" stackId="a" fill={C.accent} radius={[0,0,0,0]} />
-                      <Bar dataKey="Ground Rent" stackId="a" fill={C.yellow} radius={[3,3,0,0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              );
-            })()}
-
-            {/* Escalation Gantt */}
+            {/* Slab timeline (gantt) */}
             {(() => {
               const maxDays = Math.max(...YARD.map(l => l.dwell)) + 14;
               const pct = d => `${(d / maxDays * 100).toFixed(2)}%`;
               return (
                 <div style={card}>
-                  <div style={sectionTitle}>Slab timeline — in-yard containers (colour = tariff slab · white tick = next escalation)</div>
+                  <div style={sectionTitle}>Slab timeline — colour = tariff slab · white tick = next escalation</div>
                   {/* Day markers */}
                   <div style={{ position: "relative", height: 18, marginLeft: 188, marginRight: 50, marginBottom: 6 }}>
                     {TARIFF.holding_import.slice(1).map(s => s.from <= maxDays && (
@@ -743,275 +688,167 @@ export default function CfsApp({ onSwitch }) {
               );
             })()}
 
-            {/* Escalation tracker */}
+            {/* Yard table */}
             <div style={card}>
-              <div style={sectionTitle}>Escalation tracker — slab countdown for in-yard containers</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                Handling fees are earned once at clearance regardless of dwell. Each additional day in a paid slab earns ground rent but blocks the slot from the next consignment's handling fee. Prioritise clearance of containers approaching slab jumps.
-              </div>
+              <div style={sectionTitle}>Containers in yard — ground rent accruing daily (as of {TODAY})</div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
-                  <th style={TH}>Container</th>
-                  <th style={TH}>Consignee</th>
-                  <th style={TH}>Cargo / class</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Dwell</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Rate today</th>
-                  <th style={TH}>Next escalation</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Next rate/day</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Accrued</th>
+                  <th style={TH}>Container</th><th style={TH}>Consignee / CHA</th><th style={TH}>Cargo</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Dwell</th><th style={TH}>Next escalation</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Accrued</th><th style={TH}></th>
                 </tr></thead>
-                <tbody>
-                  {[...YARD].sort((a, b) => {
-                    const da = a.slabInfo?.isMaxSlab ? 9999 : (a.slabInfo?.daysUntilEscalation ?? 9998);
-                    const db = b.slabInfo?.isMaxSlab ? 9999 : (b.slabInfo?.daysUntilEscalation ?? 9998);
-                    return da - db;
-                  }).map(l => {
-                    const si = l.slabInfo;
-                    const urgencyColor = si?.isMaxSlab ? C.red
-                      : si?.daysUntilEscalation <= 2 ? C.red
-                      : si?.daysUntilEscalation <= 5 ? C.yellow
-                      : C.muted;
-                    return (
-                      <tr key={l.container_id}>
-                        <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>
-                          {l.container_no} <span style={{ color: C.muted }}>({l.size}')</span>
-                        </td>
-                        <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
-                        <td style={{ ...TD, fontSize: 12 }}>{l.commodity}<div style={{ fontSize: 11, color: C.muted }}>{l.cargo_class}</div></td>
-                        <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: l.dwell > 30 ? C.red : l.dwell > 15 ? C.yellow : C.text }}>
-                          {l.dwell}d
-                        </td>
-                        <td style={{ ...TD, ...mono, textAlign: "right" }}>
-                          {si?.isFree
-                            ? <span style={{ color: C.green }}>Free</span>
-                            : si ? `₹${fmt(si.currentRate)}/d` : "—"}
-                        </td>
-                        <td style={{ ...TD, fontSize: 12, color: urgencyColor, fontWeight: si?.daysUntilEscalation <= 5 ? 600 : 400 }}>
-                          {si?.isMaxSlab
-                            ? <span style={{ color: C.red }}>Max slab — no further escalation</span>
-                            : si?.daysUntilEscalation === 1
-                            ? `Tomorrow · ${si.escalationDate}`
-                            : si?.daysUntilEscalation != null
-                            ? `${si.daysUntilEscalation} days · ${si.escalationDate}`
-                            : "—"}
-                        </td>
-                        <td style={{ ...TD, ...mono, textAlign: "right", color: si?.nextRate ? C.muted : C.red }}>
-                          {si?.nextRate ? `₹${fmt(si.nextRate)}/d` : si?.isMaxSlab ? `₹${fmt(si.currentRate)}/d` : "—"}
-                        </td>
-                        <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
+                <tbody>{YARD.map(l => {
+                  const si = l.slabInfo;
+                  const escColor = si && (si.isMaxSlab || si.daysUntilEscalation <= 2) ? C.red : si && si.daysUntilEscalation <= 5 ? C.yellow : C.muted;
+                  const escLabel = si?.isMaxSlab
+                    ? "Max slab"
+                    : si?.daysUntilEscalation === 1
+                    ? `Tomorrow → ₹${fmt(si.nextRate)}/d`
+                    : si?.daysUntilEscalation != null
+                    ? `${si.daysUntilEscalation} days → ₹${fmt(si.nextRate)}/d`
+                    : "—";
+                  return (
+                    <tr key={l.container_id}>
+                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
+                      <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
+                      <td style={{ ...TD, fontSize: 12 }}>{l.commodity}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: l.dwell > 30 ? C.red : l.dwell > 15 ? C.yellow : C.green }}>{l.dwell}d</td>
+                      <td style={{ ...TD, fontSize: 13, color: escColor }}>{escLabel}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        {l.dwell > 3 && <button style={btn} onClick={() => issueDemandNotice(l)}>Demand notice →</button>}
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
               </table>
-            </div>
-
-            {/* Consignee dwell profile */}
-            <div style={card}>
-              <div style={sectionTitle}>Consignee dwell profile — handling vs ground rent revenue split (import)</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                When ground rent forms a high share of an account's revenue, that consignee is occupying slots beyond their billing value — the handling fees a fast-turning replacement box would have generated are foregone. Target: ≥70% of boxes cleared within 5 days.
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>
-                  <th style={TH}>Consignee</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Boxes</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Avg dwell</th>
-                  <th style={{ ...TH, textAlign: "right" }}>≤5d cleared</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Avg handling</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Avg ground rent</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Ground rent %</th>
-                  <th style={TH}>Profile</th>
-                </tr></thead>
-                <tbody>
-                  {BY_CONSIGNEE
-                    .filter(r => LEDGER.some(l => l.consignee === r.key && l.direction === "Import"))
-                    .sort((a, b) => parseFloat(b.avgDwell) - parseFloat(a.avgDwell))
-                    .map(r => {
-                      const isSlow = r.groundRentShare > 30 || (r.pctCleared5d !== null && r.pctCleared5d < 20);
-                      const isFast = r.pctCleared5d !== null && r.pctCleared5d >= 70 && r.groundRentShare < 15;
-                      const dwellNum = parseFloat(r.avgDwell);
-                      return (
-                        <tr key={r.key}>
-                          <td style={TD}>{r.key}</td>
-                          <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.boxes}</td>
-                          <td style={{ ...TD, ...mono, textAlign: "right", color: dwellNum > 15 ? C.red : dwellNum > 7 ? C.yellow : C.green }}>
-                            {r.avgDwell}d
-                          </td>
-                          <td style={{ ...TD, ...mono, textAlign: "right", color: r.pctCleared5d === null ? C.muted : r.pctCleared5d >= 70 ? C.green : r.pctCleared5d >= 40 ? C.yellow : C.red }}>
-                            {r.pctCleared5d === null ? "—" : `${r.pctCleared5d}%`}
-                          </td>
-                          <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.avgHandling)}</td>
-                          <td style={{ ...TD, ...mono, textAlign: "right", color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.muted }}>
-                            ₹{fmt(r.avgGroundRent)}
-                          </td>
-                          <td style={{ ...TD, textAlign: "right" }}>
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
-                              <div style={{ width: 56, height: 6, background: C.surface, borderRadius: 3, overflow: "hidden" }}>
-                                <div style={{ width: `${Math.min(100, r.groundRentShare)}%`, height: "100%", background: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.green, borderRadius: 3 }} />
-                              </div>
-                              <span style={{ ...mono, fontSize: 12, fontWeight: r.groundRentShare > 30 ? 700 : 400, color: r.groundRentShare > 30 ? C.red : r.groundRentShare > 15 ? C.yellow : C.green, minWidth: 28 }}>
-                                {r.groundRentShare}%
-                              </span>
-                            </div>
-                          </td>
-                          <td style={{ ...TD, fontSize: 12 }}>
-                            {isFast
-                              ? <span style={{ color: C.green, fontWeight: 600 }}>Fast clearer</span>
-                              : isSlow
-                              ? <span style={{ color: C.red, fontWeight: 600 }}>Chronic slow</span>
-                              : <span style={{ color: C.muted }}>Normal</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
-                Ground rent % = ground rent revenue as share of total invoiced revenue per account. In-yard containers counted in avg dwell but excluded from ≤5d cleared (not yet closed).
-              </div>
             </div>
           </>
         )}
 
         {/* ── BILL — demand notices & long-stay escalation ── */}
-        {stage === "bill" && (
-          <div style={card}>
-            <div style={sectionTitle}>Long-stay exposure & Section 48 auction track (&gt;30 days in yard)</div>
-            {LONG_STAY.length === 0 && <div style={{ color: C.muted }}>No boxes over 30 days. Clean yard.</div>}
-            {LONG_STAY.map(l => {
-              const auctionCosts = TARIFF.auction.handling_per_box + TARIFF.auction.valuation_noc;
-              return (
-                <div key={l.container_id} style={{ border: `1px solid ${l.dwell > 90 ? C.red : C.border}`, borderRadius: 8, padding: 16, marginBottom: 14 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <span style={{ ...mono, color: C.accent, cursor: "pointer" }} onClick={() => setDetail(l)}>{l.container_no}</span>
-                      <span style={{ color: C.muted, fontSize: 12 }}> · {l.size}' · {l.commodity} · {l.consignee} ({l.cha})</span>
+        {stage === "bill" && (() => {
+          const longStayAccrued = LONG_STAY.reduce((s, l) => s + l.expected, 0);
+          return (
+            <>
+              <StageHeader title="Long-stay escalation" stat={`${LONG_STAY.length} past 30d · ₹${fmt(longStayAccrued)} accrued · Section 48 track`} />
+              {LONG_STAY.length === 0 && <div style={{ color: C.muted }}>No boxes over 30 days. Clean yard.</div>}
+              {LONG_STAY.map(l => {
+                const auctionCosts = TARIFF.auction.handling_per_box + TARIFF.auction.valuation_noc;
+                return (
+                  <div key={l.container_id} style={{ background: C.card, border: `1px solid ${l.dwell > 90 ? C.red : C.border}`, borderRadius: 12, padding: 22, marginBottom: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
+                      <div>
+                        <span style={{ ...mono, color: C.accent, cursor: "pointer", fontSize: 16 }} onClick={() => setDetail(l)}>{l.container_no}</span>
+                        <span style={{ color: C.muted, fontSize: 13 }}> · {l.size}' · {l.commodity} · {l.consignee} ({l.cha})</span>
+                      </div>
+                      <div style={{ ...mono, fontWeight: 700, fontSize: 18, color: l.dwell > 90 ? C.red : C.yellow }}>{l.dwell} days</div>
                     </div>
-                    <div style={{ ...mono, fontWeight: 700, color: l.dwell > 90 ? C.red : C.yellow }}>{l.dwell} days</div>
+                    <div style={{ display: "flex", gap: 28, marginTop: 12, fontSize: 13, flexWrap: "wrap" }}>
+                      <span>Accrued dues: <b style={{ ...mono, fontSize: 15 }}>₹{fmt(l.expected)}</b></span>
+                      <span style={{ color: C.muted }}>Auction-track costs: ₹{fmt(auctionCosts)}</span>
+                      <span style={{ color: C.muted }}>Slot blocked: {l.dwell} days × {l.teu} TEU</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+                      <button style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }} onClick={() => issueDemandNotice(l)}>Final demand notice →</button>
+                      {l.dwell > 60 && <button style={{ padding: "8px 15px", borderRadius: 8, border: `1px solid ${C.red}`, background: "transparent", color: C.red, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }} onClick={() => issueAuctionDocket(l)}>Section 48 auction docket →</button>}
+                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: 24, marginTop: 10, fontSize: 12, flexWrap: "wrap" }}>
-                    <span>Accrued dues: <b style={mono}>₹{fmt(l.expected)}</b></span>
-                    <span style={{ color: C.muted }}>Auction-track costs: ₹{fmt(auctionCosts)} (handling ₹{fmt(TARIFF.auction.handling_per_box)} + valuation/NOC ₹{fmt(TARIFF.auction.valuation_noc)})</span>
-                    <span style={{ color: C.muted }}>Slot blocked: {l.dwell} days × {l.teu} TEU</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                    <button style={btn} onClick={() => issueDemandNotice(l)}>Final demand notice →</button>
-                    {l.dwell > 60 && <button style={{ ...btn, borderColor: C.red, color: C.red }} onClick={() => issueAuctionDocket(l)}>Section 48 auction docket →</button>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </>
+          );
+        })()}
 
         {/* ── RECOVER — tariff reconciliation & leakage ── */}
-        {stage === "recover" && (
-          <>
-            {(() => {
-              const causeTotals = {};
-              LEAKS.forEach(l => {
-                const cause = l.leak_reason || "Other";
-                causeTotals[cause] = (causeTotals[cause] || 0) + (-l.variance);
-              });
-              const causeData = Object.entries(causeTotals)
-                .map(([cause, amount]) => ({ cause: cause.length > 38 ? cause.slice(0, 36) + "…" : cause, amount: Math.round(amount) }))
-                .sort((a, b) => b.amount - a.amount);
-              return (
-                <div style={card}>
-                  <div style={sectionTitle}>Leakage by cause (₹) — top undercharge categories</div>
-                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                    Horizontal bars show cumulative revenue leakage per undercharge category. Address the longest bars first — they represent systematic gaps in the billing process.
-                  </div>
-                  <ResponsiveContainer width="100%" height={Math.max(120, causeData.length * 44 + 40)}>
-                    <BarChart data={causeData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
-                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" horizontal={false} />
-                      <XAxis type="number" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} tickFormatter={v => `₹${(v/1000).toFixed(0)}K`} />
-                      <YAxis type="category" dataKey="cause" width={230} stroke={C.muted} fontSize={11} tick={{ fill: C.muted }} />
-                      <Tooltip
-                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
-                        formatter={(v) => [`₹${v.toLocaleString()}`, "Leakage"]}
-                      />
-                      <Bar dataKey="amount" fill={C.red} radius={[0, 4, 4, 0]} opacity={0.85} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              );
-            })()}
-            <div style={card}>
-              <div style={sectionTitle}>Tariff reconciliation — billing system vs published tariff</div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                Every container's charges recomputed from the published tariff and diffed against the invoiced amount from your billing extract.
-                <b style={{ color: C.red }}> ₹{fmt(TOTAL_LEAKAGE)} of undercharges found across {LEAKS.length} of {LEDGER.length} boxes ({((LEAKS.length / LEDGER.length) * 100).toFixed(0)}%).</b>
+        {stage === "recover" && (() => {
+          const leakPct = ((TOTAL_LEAKAGE / TOTALS.revenue) * 100).toFixed(1);
+          const pendingLeaks = LEAKS.filter(l => !isIssued(l.container_id));
+          const pendingAmt = pendingLeaks.reduce((s, l) => s - l.variance, 0);
+          const causeTotals = {};
+          LEAKS.forEach(l => { const cause = l.leak_reason || "Other"; causeTotals[cause] = (causeTotals[cause] || 0) + (-l.variance); });
+          const causeData = Object.entries(causeTotals).map(([cause, amount]) => ({ cause, amount: Math.round(amount) })).sort((a, b) => b.amount - a.amount);
+          const cMax = Math.max(...causeData.map(c => c.amount), 1);
+
+          return (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 24, flexWrap: "wrap", marginBottom: 30 }}>
+                <StageHeader title="Tariff reconciliation" stat={`₹${fmt(TOTAL_LEAKAGE)} · ${LEAKS.length} of ${LEDGER.length} boxes · ${leakPct}% of revenue`} />
+                <button
+                  onClick={issueAllDebitNotes}
+                  style={{ padding: "12px 22px", borderRadius: 9, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 14, flexShrink: 0, fontFamily: "inherit" }}
+                >
+                  {pendingLeaks.length ? `Issue all ${pendingLeaks.length} debit notes · ₹${fmt(pendingAmt)} →` : "All debit notes issued ✓"}
+                </button>
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>
-                  <th style={TH}>Container</th><th style={TH}>Consignee</th><th style={TH}>Cause detected</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Expected</th><th style={{ ...TH, textAlign: "right" }}>Invoiced</th>
-                  <th style={{ ...TH, textAlign: "right" }}>Shortfall</th><th style={TH}></th>
-                </tr></thead>
-                <tbody>{LEAKS.map(l => (
-                  <tr key={l.container_id}>
-                    <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no}</td>
-                    <td style={TD}>{l.consignee}</td>
-                    <td style={{ ...TD, fontSize: 12, color: C.muted }}>{l.leak_reason}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.invoiced)}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right", color: C.red, fontWeight: 700 }}>₹{fmt(-l.variance)}</td>
-                    <td style={{ ...TD, textAlign: "right" }}><button style={btn} onClick={() => issueDebitNote(l)}>Debit note →</button></td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-            <div style={card}>
-              <div style={sectionTitle}>Rate revision exhibit — 2023 sheet vs current published sheet (Chennai Port, GP)</div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={TH}>Service</th><th style={{ ...TH, textAlign: "right" }}>20' (2023)</th><th style={{ ...TH, textAlign: "right" }}>20' (current)</th><th style={{ ...TH, textAlign: "right" }}>40' (2023)</th><th style={{ ...TH, textAlign: "right" }}>40' (current)</th></tr></thead>
-                <tbody>
-                  {[["Load-out delivery", TARIFF.handling_import.Chennai.GP.loadout, TARIFF_REVISION.handling_import_chennai_GP.loadout],
-                    ["De-stuffing service", TARIFF.handling_import.Chennai.GP.destuff, TARIFF_REVISION.handling_import_chennai_GP.destuff]].map(([label, old, nw]) => (
-                    <tr key={label}>
-                      <td style={TD}>{label}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(old.s20)}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right", color: C.green }}>₹{fmt(nw.s20)} <span style={{ fontSize: 11, color: C.muted }}>(+{Math.round((nw.s20 / old.s20 - 1) * 100)}%)</span></td>
-                      <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(old.s40)}</td>
-                      <td style={{ ...TD, ...mono, textAlign: "right", color: C.green }}>₹{fmt(nw.s40)} <span style={{ fontSize: 11, color: C.muted }}>(+{Math.round((nw.s40 / old.s40 - 1) * 100)}%)</span></td>
-                    </tr>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: 18, alignItems: "start" }}>
+                <div style={card}>
+                  <div style={sectionTitle}>Leakage by cause — fix the process, not just the invoice</div>
+                  {causeData.map(c => (
+                    <div key={c.cause} style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 5, lineHeight: 1.4 }}>{c.cause}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: `${Math.max(3, Math.round((c.amount / cMax) * 100) * 0.75)}%`, height: 14, background: C.red, opacity: 0.85, borderRadius: "0 4px 4px 0" }} />
+                        <span style={{ fontSize: 12, ...mono }}>₹{fmt(c.amount)}</span>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>If any box was billed on the old sheet after the revision date, the reconciliation engine flags it — the same diff that catches slab errors catches stale rate cards.</div>
-            </div>
-          </>
-        )}
+                </div>
+                <div style={card}>
+                  <div style={sectionTitle}>Undercharged boxes — billing system vs published tariff</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "118px minmax(0,1.3fr) 92px 84px 110px" }}>
+                    <div style={{ ...TH, textAlign: "left" }}>Container</div>
+                    <div style={{ ...TH, textAlign: "left" }}>Consignee</div>
+                    <div style={{ ...TH, textAlign: "right" }}>Shortfall</div>
+                    <div style={{ ...TH, textAlign: "left", paddingLeft: 16 }}>Status</div>
+                    <div style={{ borderBottom: `1px solid ${C.border}` }}></div>
+                  </div>
+                  {LEAKS.map(l => {
+                    const issued = isIssued(l.container_id);
+                    return (
+                      <div key={l.container_id} style={{ display: "grid", gridTemplateColumns: "118px minmax(0,1.3fr) 92px 84px 110px", alignItems: "center" }}>
+                        <div title={l.leak_reason} style={{ ...TD, ...mono, color: C.accent }}>{l.container_no}</div>
+                        <div title={l.leak_reason} style={TD}>{l.consignee}</div>
+                        <div style={{ ...TD, textAlign: "right", color: C.red, fontWeight: 700, ...mono }}>₹{fmt(-l.variance)}</div>
+                        <div style={{ ...TD, fontSize: 12, paddingLeft: 16, color: issued ? C.green : C.muted }}>{issued ? "✓ Issued" : "Pending"}</div>
+                        <div style={{ ...TD, textAlign: "right" }}>
+                          {!issued && <button style={btn} onClick={() => issueDebitNote(l)}>Debit note →</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          );
+        })()}
 
         {/* ── INTELLIGENCE rail — AI query ── */}
         {stage === "intelligence" && (
           <>
-            <div style={{ marginBottom: 20 }}>
-              <div style={sectionTitle}>Try a sample question</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {CFS_SAMPLE_QUESTIONS.map((q, i) => (
-                  <button key={i} onClick={() => { setQuestion(q); handleQuery(q); }}
-                    style={{ padding: "7px 14px", borderRadius: 20, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
+            <StageHeader title="Ask the data" />
+            <div style={{ display: "flex", gap: 10, marginBottom: 16, maxWidth: 860 }}>
               <input value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => e.key === "Enter" && handleQuery()}
                 placeholder="Ask about dwell, leakage, margins, consignees, CHAs…"
-                style={{ flex: 1, padding: "12px 16px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none" }} />
+                style={{ flex: 1, padding: "14px 18px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 15, fontFamily: "inherit", outline: "none" }} />
               <button onClick={() => handleQuery()} disabled={loading}
-                style={{ padding: "12px 24px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                style={{ padding: "14px 26px", borderRadius: 10, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>
                 {loading ? "Analysing…" : "Ask →"}
               </button>
             </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 26, maxWidth: 860 }}>
+              {CFS_SAMPLE_QUESTIONS.map((q, i) => (
+                <button key={i} onClick={() => { setQuestion(q); handleQuery(q); }}
+                  style={{ padding: "7px 14px", borderRadius: 20, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                  {q}
+                </button>
+              ))}
+            </div>
             {result && (
-              <div style={card}>
+              <div style={{ ...card, maxWidth: 860 }}>
                 <div style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>{result.question}</div>
-                <div style={{ fontSize: 15, marginBottom: 14 }}>{result.summary}</div>
+                <div style={{ fontSize: 16, marginBottom: 14, lineHeight: 1.55 }}>{result.summary}</div>
                 {result.table?.length > 0 && (
                   <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
                     <thead><tr>{Object.keys(result.table[0]).map(k => <th key={k} style={TH}>{k}</th>)}</tr></thead>
@@ -1020,8 +857,7 @@ export default function CfsApp({ onSwitch }) {
                     ))}</tbody>
                   </table>
                 )}
-                {result.insight && <div style={{ fontSize: 13, color: C.accent }}>💡 {result.insight}</div>}
-                {result.sql && <pre style={{ fontSize: 11, color: C.muted, ...mono, marginTop: 12, whiteSpace: "pre-wrap" }}>{result.sql}</pre>}
+                {result.insight && <div style={{ fontSize: 13, color: C.accent }}>{result.insight}</div>}
               </div>
             )}
           </>
@@ -1030,8 +866,12 @@ export default function CfsApp({ onSwitch }) {
         {/* ── PROFITABILITY rail ── */}
         {stage === "profitability" && (
           <>
+            <StageHeader
+              title="Profitability"
+              stat={`${Math.round((TOTALS.margin / TOTALS.revenue) * 100)}% blended margin · ${belowFloor.length} accounts below ${MARGIN_FLOOR}% floor`}
+            />
             <div style={card}>
-              <div style={sectionTitle}>Margin by consignee (revenue = invoiced · cost = activity-based allocation)</div>
+              <div style={sectionTitle}>Margin by consignee</div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
                   <th style={TH}>Consignee</th><th style={{ ...TH, textAlign: "right" }}>Boxes</th>
@@ -1046,22 +886,72 @@ export default function CfsApp({ onSwitch }) {
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.revenue)}</td>
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.cost)}</td>
                     <td style={{ ...TD, ...mono, textAlign: "right", color: r.margin >= 0 ? C.green : C.red }}>₹{fmt(r.margin)}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right", color: r.marginPct < 35 ? C.red : C.green }}>{r.marginPct}%</td>
+                    <td style={{ ...TD, ...mono, textAlign: "right", color: r.marginPct < MARGIN_FLOOR ? C.red : C.green }}>{r.marginPct}%</td>
                     <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.avgDwell}d</td>
                   </tr>
                 ))}</tbody>
               </table>
             </div>
+            {(() => {
+              const scatterData = BY_CONSIGNEE
+                .filter(r => r.closedImportBoxes > 0)
+                .map(r => ({ dwell: parseFloat(r.avgDwell), margin: r.marginPct, boxes: r.boxes, name: r.key }));
+              return (
+                <div style={card}>
+                  <div style={sectionTitle}>Margin % vs avg dwell — per consignee (import boxes only)</div>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <ScatterChart margin={{ top: 20, right: 30, bottom: 40, left: 10 }}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                      <XAxis type="number" dataKey="dwell" name="Avg Dwell" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }}
+                        label={{ value: "Avg dwell (days)", position: "insideBottom", offset: -24, fill: C.muted, fontSize: 11 }} />
+                      <YAxis type="number" dataKey="margin" name="Margin" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }}
+                        tickFormatter={v => `${v}%`} label={{ value: "Margin %", angle: -90, position: "insideLeft", offset: 10, fill: C.muted, fontSize: 11 }} />
+                      <ReferenceLine x={5} stroke={C.green} strokeDasharray="4 4" label={{ value: "5d target", position: "top", fill: C.green, fontSize: 10 }} />
+                      <ReferenceLine y={MARGIN_FLOOR} stroke={C.yellow} strokeDasharray="4 4" label={{ value: `${MARGIN_FLOOR}% floor`, position: "right", fill: C.yellow, fontSize: 10 }} />
+                      <Tooltip
+                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const d = payload[0].payload;
+                          return (
+                            <div style={{ background: C.card, border: `1px solid ${C.border}`, padding: "8px 12px", borderRadius: 6, fontSize: 12 }}>
+                              <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.name}</div>
+                              <div style={{ color: C.muted }}>Avg dwell: <span style={mono}>{d.dwell}d</span></div>
+                              <div style={{ color: C.muted }}>Margin: <span style={{ ...mono, color: d.margin < MARGIN_FLOOR ? C.red : C.green }}>{d.margin}%</span></div>
+                              <div style={{ color: C.muted }}>{d.boxes} boxes</div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Scatter
+                        data={scatterData}
+                        shape={({ cx, cy, payload }) => {
+                          const ok = payload.margin >= MARGIN_FLOOR && payload.dwell <= 10;
+                          const r = Math.max(5, Math.sqrt(payload.boxes) * 3.5);
+                          return <circle cx={cx} cy={cy} r={r} fill={ok ? C.green : C.red} fillOpacity={0.7} stroke={ok ? C.green : C.red} strokeWidth={1} />;
+                        }}
+                      />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>Dot size ∝ boxes handled. Red = below {MARGIN_FLOOR}% floor or above 10-day avg dwell.</div>
+                </div>
+              );
+            })()}
+
+            {/* ── SECONDARY EXHIBITS ── */}
+            <div style={{ borderTop: `2px solid ${C.border}`, margin: "4px 0 20px", position: "relative" }}>
+              <span style={{ position: "absolute", top: -10, left: 0, background: C.bg, paddingRight: 12, fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "1px" }}>Secondary exhibits</span>
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               <div style={card}>
                 <div style={sectionTitle}>Margin by cargo class</div>
                 {BY_CLASS.map(r => (
                   <div key={r.key} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
                     <span>{r.key} <span style={{ color: C.muted, fontSize: 11 }}>({r.boxes} boxes)</span></span>
-                    <span style={{ ...mono, color: r.marginPct < 35 ? C.red : C.green }}>₹{fmt(r.margin)} · {r.marginPct}%</span>
+                    <span style={{ ...mono, color: r.marginPct < MARGIN_FLOOR ? C.red : C.green }}>₹{fmt(r.margin)} · {r.marginPct}%</span>
                   </div>
                 ))}
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>ODC's +25% handling premium vs crane hire & double holding — check whether the premium actually covers the equipment cost.</div>
               </div>
               <div style={card}>
                 <div style={sectionTitle}>Margin by port of discharge & CHA</div>
@@ -1078,54 +968,6 @@ export default function CfsApp({ onSwitch }) {
                 ))}
               </div>
             </div>
-            {(() => {
-              const scatterData = BY_CONSIGNEE
-                .filter(r => r.closedImportBoxes > 0)
-                .map(r => ({ dwell: parseFloat(r.avgDwell), margin: r.marginPct, boxes: r.boxes, name: r.key }));
-              return (
-                <div style={card}>
-                  <div style={sectionTitle}>Margin % vs avg dwell — per consignee (import boxes only)</div>
-                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 14 }}>
-                    Each dot = one consignee. Dots in the top-left quadrant (fast clearance, healthy margin) are ideal. Chronic slow clearers drift right — their ground rent share dilutes margin below the 35% floor.
-                  </div>
-                  <ResponsiveContainer width="100%" height={280}>
-                    <ScatterChart margin={{ top: 20, right: 30, bottom: 40, left: 10 }}>
-                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
-                      <XAxis type="number" dataKey="dwell" name="Avg Dwell" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }}
-                        label={{ value: "Avg dwell (days)", position: "insideBottom", offset: -24, fill: C.muted, fontSize: 11 }} />
-                      <YAxis type="number" dataKey="margin" name="Margin" stroke={C.muted} fontSize={11} tick={{ fill: C.muted }}
-                        tickFormatter={v => `${v}%`} label={{ value: "Margin %", angle: -90, position: "insideLeft", offset: 10, fill: C.muted, fontSize: 11 }} />
-                      <ReferenceLine x={5} stroke={C.green} strokeDasharray="4 4" label={{ value: "5d target", position: "top", fill: C.green, fontSize: 10 }} />
-                      <ReferenceLine y={35} stroke={C.yellow} strokeDasharray="4 4" label={{ value: "35% floor", position: "right", fill: C.yellow, fontSize: 10 }} />
-                      <Tooltip
-                        contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12 }}
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const d = payload[0].payload;
-                          return (
-                            <div style={{ background: C.card, border: `1px solid ${C.border}`, padding: "8px 12px", borderRadius: 6, fontSize: 12 }}>
-                              <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.name}</div>
-                              <div style={{ color: C.muted }}>Avg dwell: <span style={mono}>{d.dwell}d</span></div>
-                              <div style={{ color: C.muted }}>Margin: <span style={{ ...mono, color: d.margin < 35 ? C.red : C.green }}>{d.margin}%</span></div>
-                              <div style={{ color: C.muted }}>{d.boxes} boxes</div>
-                            </div>
-                          );
-                        }}
-                      />
-                      <Scatter
-                        data={scatterData}
-                        shape={({ cx, cy, payload }) => {
-                          const ok = payload.margin >= 35 && payload.dwell <= 10;
-                          const r = Math.max(5, Math.sqrt(payload.boxes) * 3.5);
-                          return <circle cx={cx} cy={cy} r={r} fill={ok ? C.green : C.red} fillOpacity={0.7} stroke={ok ? C.green : C.red} strokeWidth={1} />;
-                        }}
-                      />
-                    </ScatterChart>
-                  </ResponsiveContainer>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>Dot size ∝ number of boxes handled. Red = below 35% margin floor or above 10-day avg dwell.</div>
-                </div>
-              );
-            })()}
 
             <div style={card}>
               <div style={sectionTitle}>Slot economics by dwell bucket — does ground rent beat throughput?</div>
@@ -1269,7 +1111,7 @@ export default function CfsApp({ onSwitch }) {
               {/* slab step chart */}
               {(() => {
                 const slabChartData = [];
-                T.holding_import.forEach((slab, i) => {
+                T.holding_import.forEach((slab) => {
                   const days = slab.to === 9999 ? [slab.from, slab.from + 14] : [slab.from, slab.to];
                   days.forEach(d => {
                     if (!slabChartData.some(p => p.day === d)) {
@@ -1371,33 +1213,62 @@ export default function CfsApp({ onSwitch }) {
         })()}
 
         {/* ── REGISTER rail ── */}
-        {stage === "register" && (
-          <div style={card}>
-            <div style={sectionTitle}>Action register — every artifact generated, auditable</div>
-            {register.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No actions yet. Debit notes, demand notices, auction dockets and memos generated from other stages land here.</div>}
-            {register.length > 0 && (
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={TH}>Ref</th><th style={TH}>Type</th><th style={TH}>Party</th><th style={TH}>Container</th><th style={{ ...TH, textAlign: "right" }}>Amount</th><th style={TH}>Date</th></tr></thead>
-                <tbody>{register.map(r => (
-                  <tr key={r.ref}>
-                    <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.ref}</td>
-                    <td style={TD}>{r.type}</td>
-                    <td style={TD}>{r.party}</td>
-                    <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.container_no}</td>
-                    <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.amount ? `₹${fmt(r.amount)}` : "—"}</td>
-                    <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.date}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            )}
-            {register.length > 0 && (
-              <button style={{ ...btn, marginTop: 14, borderColor: C.border, color: C.muted }}
-                onClick={() => { clearRegister(); showToast("Register cleared"); }}>
-                Clear register
-              </button>
-            )}
-          </div>
-        )}
+        {stage === "register" && (() => {
+          const totalsByType = {};
+          register.forEach(x => { totalsByType[x.type] = (totalsByType[x.type] || 0) + Math.abs(x.amount || 0); });
+          return (
+            <>
+              <StageHeader
+                title="Action register"
+                stat={register.length ? `${register.length} artifact${register.length === 1 ? "" : "s"} · ₹${fmt(sessionRecovered)} raised this session` : "no artifacts this session"}
+              />
+              <div style={{ display: "flex", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 22px", minWidth: 180 }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>Recoverable raised</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, ...mono, marginTop: 5, color: C.green }}>₹{fmt(sessionRecovered)}</div>
+                </div>
+                {Object.entries(totalsByType).map(([type, amt]) => (
+                  <div key={type} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 22px", minWidth: 180 }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>{type}s</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, ...mono, marginTop: 5, color: C.text }}>{amt ? `₹${fmt(amt)}` : register.filter(x => x.type === type).length}</div>
+                  </div>
+                ))}
+              </div>
+
+              {register.length === 0 && (
+                <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 40, textAlign: "center", color: C.muted, fontSize: 14 }}>
+                  No artifacts yet this session. Issue a debit note from{" "}
+                  <a href="#" onClick={e => { e.preventDefault(); setStage("recover"); }} style={{ color: C.accent }}>Recover</a>{" "}
+                  or a demand notice from{" "}
+                  <a href="#" onClick={e => { e.preventDefault(); setStage("operate"); }} style={{ color: C.accent }}>Operate</a>{" "}
+                  and it lands here.
+                </div>
+              )}
+
+              {register.length > 0 && (
+                <div style={card}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr><th style={TH}>Ref</th><th style={TH}>Type</th><th style={TH}>Party</th><th style={TH}>Container</th><th style={{ ...TH, textAlign: "right" }}>Amount</th><th style={TH}>Date</th></tr></thead>
+                    <tbody>{register.map(r => (
+                      <tr key={r.ref}>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.ref}</td>
+                        <td style={TD}>{r.type}</td>
+                        <td style={TD}>{r.party}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.container_no}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.amount ? `₹${fmt(Math.abs(r.amount))}` : "—"}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.date}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  <button style={{ ...btn, marginTop: 14, borderColor: C.border, color: C.muted }}
+                    onClick={() => { clearRegister(); setIssued({}); showToast("Session register cleared"); }}>
+                    Clear session register
+                  </button>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
       </LifecycleShell>
     </div>
