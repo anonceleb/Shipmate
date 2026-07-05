@@ -159,6 +159,23 @@ export const CONTAINERS = [
   ct("CN056","EGHU3308157",40,"Chennai","GP","Export","KPR Mill Ltd","Sanco Trans","Evergreen","Knitted garments","2026-06-03","2026-06-06","2026-06-08",{w:1}),
 ];
 
+// ── ADVANCE BOOKINGS (synthetic — Import General Manifest nominations to this CFS) ─
+// Shipping lines nominate this CFS on the IGM before the box physically gates in.
+// If the CHA/transporter doesn't move it within the SLA, the nomination is at risk
+// of being diverted to a competing CFS — pure throughput loss, never billed, never seen.
+export const BOOKING_SLA_DAYS = 3;
+
+export const PENDING_BOOKINGS = [
+  { booking_id: "BK057", igm_no: "IGM/2026/3348", container_no: "COSU6637201", size: 40, port: "Chennai",    cargo_class: "ODC",      consignee: "L&T Construction Equipment", cha: "SKS Logistics",      line: "COSCO",       vessel: "COSCO SHIPPING PISCES", voyage: "077E", commodity: "Excavator superstructure", nomination_date: "2026-06-24" },
+  { booking_id: "BK058", igm_no: "IGM/2026/3311", container_no: "ONEU4471820", size: 40, port: "Chennai",    cargo_class: "GP",       consignee: "TVS Motor Company",           cha: "Triway Forwarders",  line: "ONE",         vessel: "ONE COMPETENCE",         voyage: "021E", commodity: "Two-wheeler parts", nomination_date: "2026-06-27" },
+  { booking_id: "BK059", igm_no: "IGM/2026/3352", container_no: "ONEU1129887", size: 20, port: "Chennai",    cargo_class: "GP",       consignee: "Agarwal Metal Traders",      cha: "SKS Logistics",      line: "ONE",         vessel: "ONE COMPETENCE",         voyage: "021E", commodity: "HMS scrap", nomination_date: "2026-06-29" },
+  { booking_id: "BK060", igm_no: "IGM/2026/3318", container_no: "MSKU7729004", size: 20, port: "Chennai",    cargo_class: "Hazardous",consignee: "Tagros Chemicals",           cha: "Everest Shipping",   line: "Maersk",      vessel: "MAERSK CHENNAI",         voyage: "114W", commodity: "Agrochemical intermediates", nomination_date: "2026-06-30" },
+  { booking_id: "BK061", igm_no: "IGM/2026/3325", container_no: "CMAU9915732", size: 40, port: "Ennore",     cargo_class: "GP",       consignee: "Daebu Automotive Seats",     cha: "SKS Logistics",      line: "CMA CGM",     vessel: "CMA CGM RHONE",          voyage: "902E", commodity: "Seat frames", nomination_date: "2026-07-01" },
+  { booking_id: "BK062", igm_no: "IGM/2026/3330", container_no: "HLBU4482910", size: 20, port: "Chennai",    cargo_class: "GP",       consignee: "Wheels India",                cha: "Natesa Iyer & Co",   line: "Hapag-Lloyd", vessel: "HANSA HAMBURG",          voyage: "233N", commodity: "Steel wheel rims", nomination_date: "2026-07-02" },
+  { booking_id: "BK063", igm_no: "IGM/2026/3336", container_no: "MSCU2298104", size: 40, port: "Chennai",    cargo_class: "Reefer",   consignee: "Apex Pharma Cold Chain",     cha: "Everest Shipping",   line: "MSC",         vessel: "MSC MEDITERRANEAN",      voyage: "445A", commodity: "Pharma API (reefer)", nomination_date: "2026-07-03" },
+  { booking_id: "BK064", igm_no: "IGM/2026/3341", container_no: "EGHU8871209", size: 20, port: "Kattupalli", cargo_class: "GP",       consignee: "Salcomp Manufacturing",      cha: "Triway Forwarders",  line: "Evergreen",   vessel: "EVER GIVEN",             voyage: "0091", commodity: "Charger sub-assemblies", nomination_date: "2026-07-04" },
+];
+
 // ── BILLING ADJUSTMENTS (synthetic stand-in for the billing system extract) ───
 // invoiced = engine-expected + delta. Negative delta = undercharge (leakage).
 export const INVOICE_ADJUSTMENTS = [

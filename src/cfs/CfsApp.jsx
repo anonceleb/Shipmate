@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ScatterChart, Scatter, ReferenceLine, LineChart, Line } from "recharts";
 import { C, applyTheme } from "../data/constants.js";
-import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF } from "./constants.js";
+import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF, BOOKING_SLA_DAYS } from "./constants.js";
 import {
   fmt, TODAY, MANALI_CAPACITY, getComputations,
 } from "./computations.js";
@@ -63,7 +63,7 @@ export default function CfsApp({ onSwitch }) {
   const {
     LEDGER, LEAKS, TOTAL_LEAKAGE, YARD, YARD_ACCRUED, LONG_STAY,
     BY_CONSIGNEE, BY_CHA, BY_CLASS, BY_PORT, SLOT_ECONOMICS, MONTHLY_THROUGHPUT,
-    TOTALS,
+    TOTALS, BOOK_MATCHED, BOOK_PENDING, BOOK_STATS,
   } = getComputations(terminal.abbr, rateOverrides);
 
   const [stage, setStage] = useState("overview");
@@ -253,6 +253,18 @@ export default function CfsApp({ onSwitch }) {
     showToast(`Auction docket ${ref} generated & logged`);
   };
 
+  const issueMovementReminder = b => {
+    const ref = logAction("Movement Reminder", b.consignee, b.container_no, 0);
+    markIssued(b.booking_id);
+    print("Movement Reminder", `
+      <h2>Movement Reminder — Nominated Container Not Gated In</h2>
+      <p>To: <b>${b.cha}</b> (CHA) &nbsp;·&nbsp; cc: ${b.line}</p>
+      <p>Container <b>${b.container_no}</b> (${b.size}', ${b.commodity}) was nominated to our CFS per IGM <b>${b.igm_no}</b> (vessel ${b.vessel} / voy ${b.voyage}) on ${b.nomination_date} and has not yet gated in — <b>${b.daysPending} days</b> since nomination, against our ${BOOKING_SLA_DAYS}-day movement SLA.</p>
+      <p>Consignee: ${b.consignee}</p>
+      <p>Kindly arrange immediate movement of this container to avoid the nomination lapsing and being diverted to an alternate CFS, and to limit port demurrage exposure.</p>`, ref);
+    showToast(`Movement reminder ${ref} generated & logged`);
+  };
+
   const issueRepricingMemo = row => {
     const ref = logAction("Repricing Memo", row.key, "—", 0);
     print("Commercial Repricing Memo", `
@@ -278,14 +290,49 @@ export default function CfsApp({ onSwitch }) {
     .filter(l => l.slabInfo && !l.slabInfo.isMaxSlab && l.slabInfo.daysUntilEscalation != null)
     .sort((a, b) => a.slabInfo.daysUntilEscalation - b.slabInfo.daysUntilEscalation)[0];
 
+  // ── SETTLE — collections ledger, derived live from the persisted action register ──
+  const RECEIVABLE_TYPES = new Set(["Debit Note", "Demand Notice", "Credit Note", "Auction Docket", "Payment Receipt"]);
+  const receivablesByContainer = {};
+  register.filter(r => RECEIVABLE_TYPES.has(r.type) && r.container_no && r.container_no !== "—").forEach(r => {
+    if (!receivablesByContainer[r.container_no]) receivablesByContainer[r.container_no] = { container_no: r.container_no, party: r.party, entries: [], net: 0, earliestDate: r.date };
+    const g = receivablesByContainer[r.container_no];
+    g.entries.push(r);
+    g.net += r.amount || 0;
+    if (r.date < g.earliestDate) g.earliestDate = r.date;
+  });
+  const RECEIVABLES = Object.values(receivablesByContainer).map(g => ({
+    ...g,
+    ageDays: Math.max(0, Math.round((new Date(TODAY) - new Date(g.earliestDate)) / 86400000)),
+  }));
+  const OUTSTANDING = RECEIVABLES.filter(g => g.net > 0.5).sort((a, b) => b.ageDays - a.ageDays);
+  const SETTLED = RECEIVABLES.filter(g => g.net <= 0.5 && g.entries.some(e => e.type === "Payment Receipt"));
+  const totalOutstanding = OUTSTANDING.reduce((s, g) => s + g.net, 0);
+  const sessionCollected = register.filter(r => r.type === "Payment Receipt").reduce((s, r) => s + Math.abs(r.amount || 0), 0);
+  const oldestOutstandingAge = OUTSTANDING.length ? Math.max(...OUTSTANDING.map(g => g.ageDays)) : 0;
+
+  const issuePaymentReceipt = g => {
+    const ref = logAction("Payment Receipt", g.party, g.container_no, -g.net);
+    print("Payment Receipt", `
+      <h2>Payment Receipt</h2>
+      <p>Received from: <b>${g.party}</b></p>
+      <p>Container <b>${g.container_no}</b></p>
+      <table><tr><th>Reference</th><th>Type</th><th>Amount (₹)</th></tr>
+      ${g.entries.map(e => `<tr><td>${e.ref}</td><td>${e.type}</td><td>${fmt(e.amount)}</td></tr>`).join("")}
+      <tr><th>Amount received</th><th>₹${fmt(g.net)}</th></tr></table>
+      <p>This receipt confirms settlement of the outstanding balance referenced above against container ${g.container_no}.</p>`, ref);
+    showToast(`Payment receipt ${ref} generated — ₹${fmt(g.net)} collected`);
+  };
+
   const STAGES = [
     { id: "overview", label: "Overview", hint: "why this exists — three numbers", sub: "the business case" },
     { id: "quote",    label: "Quote",    hint: "commercial repricing — accounts below margin floor", sub: `${belowFloor.length} accts below floor` },
-    { id: "book",     label: "Book",     hint: "gate-in — not yet tracked", gap: true, sub: "roadmap" },
+    { id: "book",     label: "Book",     hint: "advance nomination — IGM to gate-in", sub: `${BOOK_STATS.overdueCount} nominations overdue`, subColor: BOOK_STATS.overdueCount > 0 ? C.red : C.green },
     { id: "operate",  label: "Operate",  hint: "yard & dwell tracking", sub: `₹${fmt(YARD_ACCRUED)} accruing`, subColor: C.yellow },
     { id: "bill",     label: "Bill",     hint: "demand notices & long-stay escalation", sub: `${LONG_STAY.length} boxes past 30d` },
     { id: "recover",  label: "Recover",  hint: "tariff reconciliation & leakage recovery", sub: `₹${fmt(TOTAL_LEAKAGE)} found`, subColor: C.red },
-    { id: "settle",   label: "Settle",   hint: "collect payment — not yet built", gap: true, sub: "roadmap" },
+    { id: "settle",   label: "Settle",   hint: "collections — outstanding balances against issued artifacts",
+      sub: OUTSTANDING.length ? `₹${fmt(totalOutstanding)} outstanding` : "all settled",
+      subColor: oldestOutstandingAge > 30 ? C.red : OUTSTANDING.length ? C.yellow : C.green },
   ];
 
   return (
@@ -615,6 +662,87 @@ export default function CfsApp({ onSwitch }) {
           </>
         )}
 
+        {/* ── BOOK — advance nomination / gate-in reconciliation ── */}
+        {stage === "book" && (
+          <>
+            <StageHeader
+              title="Nomination & gate-in pipeline"
+              stat={`${BOOK_STATS.conversionPct}% nominated boxes gated in · ${BOOK_STATS.overdueCount} overdue · avg lead time ${BOOK_STATS.avgLeadTime}d`}
+            />
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
+              {[
+                ["Nominated (IGM)", BOOK_STATS.nominatedCount, C.text],
+                ["Gate-in conversion", `${BOOK_STATS.conversionPct}%`, C.accent],
+                ["Avg nomination → gate-in", `${BOOK_STATS.avgLeadTime}d`, C.text],
+                ["Overdue · at risk", `${BOOK_STATS.overdueCount} · ${fmt(BOOK_STATS.teuAtRisk)} TEU`, BOOK_STATS.overdueCount > 0 ? C.red : C.green],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, ...mono, color }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={card}>
+              <div style={sectionTitle}>Pending nominations — not yet gated in ({BOOKING_SLA_DAYS}-day movement SLA)</div>
+              {BOOK_PENDING.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No pending nominations. Everything nominated to us has gated in.</div>}
+              {BOOK_PENDING.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>IGM / Booking</th><th style={TH}>Container</th><th style={TH}>Line / Vessel</th>
+                    <th style={TH}>Consignee (CHA)</th><th style={TH}>Nominated</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Days pending</th><th style={TH}></th>
+                  </tr></thead>
+                  <tbody>{BOOK_PENDING.map(b => {
+                    const bIssued = isIssued(b.booking_id);
+                    return (
+                      <tr key={b.booking_id}>
+                        <td style={{ ...TD, fontSize: 12 }}>{b.igm_no}</td>
+                        <td style={{ ...TD, ...mono }}>{b.container_no} <span style={{ color: C.muted }}>({b.size}')</span></td>
+                        <td style={{ ...TD, fontSize: 12 }}>{b.line}<div style={{ fontSize: 11, color: C.muted }}>{b.vessel} / {b.voyage}</div></td>
+                        <td style={TD}>{b.consignee}<div style={{ fontSize: 11, color: C.muted }}>{b.cha}</div></td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{b.nomination_date}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: b.overdue ? C.red : C.muted }}>{b.daysPending}d</td>
+                        <td style={{ ...TD, textAlign: "right" }}>
+                          {bIssued
+                            ? <span style={{ fontSize: 12, color: C.green }}>✓ Sent</span>
+                            : b.overdue && <button style={btn} onClick={() => issueMovementReminder(b)}>Movement reminder →</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              )}
+              {BOOK_STATS.overdueCount > 0 && (
+                <div style={{ marginTop: 14, fontSize: 12, color: C.red }}>
+                  ₹{fmt(BOOK_STATS.revenueAtRisk)} of estimated revenue at risk if these {BOOK_STATS.teuAtRisk} TEU divert to another CFS.
+                </div>
+              )}
+            </div>
+
+            <div style={card}>
+              <div style={sectionTitle}>Recent gate-in confirmations — nomination lead time</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Container</th><th style={TH}>Consignee / CHA</th><th style={TH}>Line</th>
+                  <th style={TH}>Nominated</th><th style={TH}>Gated in</th><th style={{ ...TH, textAlign: "right" }}>Lead time</th>
+                </tr></thead>
+                <tbody>{BOOK_MATCHED.map(b => (
+                  <tr key={b.container_id}>
+                    <td style={{ ...TD, ...mono }}>{b.container_no} <span style={{ color: C.muted }}>({b.size}')</span></td>
+                    <td style={TD}>{b.consignee}<div style={{ fontSize: 11, color: C.muted }}>{b.cha}</div></td>
+                    <td style={{ ...TD, fontSize: 12 }}>{b.line}</td>
+                    <td style={{ ...TD, ...mono, fontSize: 12 }}>{b.nomination_date}</td>
+                    <td style={{ ...TD, ...mono, fontSize: 12 }}>{b.gate_in_date}</td>
+                    <td style={{ ...TD, ...mono, textAlign: "right" }}>{b.leadDays}d</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </>
+        )}
+
         {/* ── OPERATE — yard & dwell ── */}
         {stage === "operate" && (
           <>
@@ -823,6 +951,91 @@ export default function CfsApp({ onSwitch }) {
             </>
           );
         })()}
+
+        {/* ── SETTLE — collections ledger ── */}
+        {stage === "settle" && (
+          <>
+            <StageHeader
+              title="Collections"
+              stat={`₹${fmt(totalOutstanding)} outstanding · ${OUTSTANDING.length} account${OUTSTANDING.length === 1 ? "" : "s"} · ₹${fmt(sessionCollected)} collected this session`}
+            />
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
+              {[
+                ["Outstanding", `₹${fmt(totalOutstanding)}`, totalOutstanding > 0 ? C.red : C.green],
+                ["Accounts outstanding", OUTSTANDING.length, C.text],
+                ["Oldest outstanding", `${oldestOutstandingAge}d`, oldestOutstandingAge > 30 ? C.red : oldestOutstandingAge > 15 ? C.yellow : C.text],
+                ["Collected this session", `₹${fmt(sessionCollected)}`, C.green],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, ...mono, color }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={card}>
+              <div style={sectionTitle}>Outstanding balances — against issued debit notes, demand notices &amp; auction dockets</div>
+              {RECEIVABLES.length === 0 && (
+                <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 40, textAlign: "center", color: C.muted, fontSize: 14 }}>
+                  No monetary artifacts issued yet this session. Issue a debit note from{" "}
+                  <a href="#" onClick={e => { e.preventDefault(); setStage("recover"); }} style={{ color: C.accent }}>Recover</a>{" "}
+                  or a demand notice from{" "}
+                  <a href="#" onClick={e => { e.preventDefault(); setStage("operate"); }} style={{ color: C.accent }}>Operate</a>{" "}
+                  and the outstanding balance lands here for collection.
+                </div>
+              )}
+              {RECEIVABLES.length > 0 && OUTSTANDING.length === 0 && (
+                <div style={{ color: C.green, fontSize: 13 }}>✓ All issued artifacts fully collected.</div>
+              )}
+              {OUTSTANDING.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Container</th><th style={TH}>Party</th><th style={TH}>Artifacts</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Age</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Outstanding</th><th style={TH}></th>
+                  </tr></thead>
+                  <tbody>{OUTSTANDING.map(g => (
+                    <tr key={g.container_no}>
+                      <td style={{ ...TD, ...mono }}>{g.container_no}</td>
+                      <td style={TD}>{g.party}</td>
+                      <td style={{ ...TD, fontSize: 12, color: C.muted }}>{g.entries.map(e => e.type).join(" + ")}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: g.ageDays > 30 ? C.red : g.ageDays > 15 ? C.yellow : C.muted }}>{g.ageDays}d</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700 }}>₹{fmt(g.net)}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        <button style={btn} onClick={() => issuePaymentReceipt(g)}>Record payment →</button>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+
+            {SETTLED.length > 0 && (
+              <div style={card}>
+                <div style={sectionTitle}>Recently settled — this session</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Container</th><th style={TH}>Party</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Amount collected</th><th style={TH}>Receipt</th><th style={TH}>Date</th>
+                  </tr></thead>
+                  <tbody>{SETTLED.map(g => {
+                    const receipt = g.entries.find(e => e.type === "Payment Receipt");
+                    return (
+                      <tr key={g.container_no}>
+                        <td style={{ ...TD, ...mono }}>{g.container_no}</td>
+                        <td style={TD}>{g.party}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", color: C.green, fontWeight: 700 }}>₹{fmt(Math.abs(receipt?.amount || 0))}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{receipt?.ref}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{receipt?.date}</td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
 
         {/* ── INTELLIGENCE rail — AI query ── */}
         {stage === "intelligence" && (

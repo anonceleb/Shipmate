@@ -1,5 +1,5 @@
 // ── SATTVA CFS — TARIFF BILLING / COST / PROFITABILITY ENGINE ─────────────────
-import { TARIFF, TARIFF_LEGACY_HANDLING, STALE_RATE_CARD_IDS, CONTAINERS, INVOICE_ADJUSTMENTS, COST_DRIVERS, FACILITIES } from "./constants.js";
+import { TARIFF, TARIFF_LEGACY_HANDLING, STALE_RATE_CARD_IDS, CONTAINERS, INVOICE_ADJUSTMENTS, COST_DRIVERS, FACILITIES, PENDING_BOOKINGS, BOOKING_SLA_DAYS } from "./constants.js";
 
 export const fmt = n => new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n);
 export const TODAY = new Date().toISOString().slice(0, 10);
@@ -125,10 +125,21 @@ export const DWELL_BUCKETS = [
 ];
 export const bucketOf = d => DWELL_BUCKETS.find(b => d >= b.min && d <= b.max);
 
+// Deterministic pseudo-random nomination lead time (2–6 days) per container —
+// stands in for the gap between IGM nomination and physical gate-in.
+function seedLeadDays(containerId) {
+  let h = 0;
+  for (const ch of containerId) h = (h * 31 + ch.charCodeAt(0)) % 97;
+  return 2 + (h % 5);
+}
+
 export function getComputations(terminalAbbr, rateOverrides = {}) {
   const ET = buildEffectiveTariff(rateOverrides);   // effective tariff with UI overrides applied
 
   const terminalContainers = CONTAINERS.filter((c, idx) => {
+    return terminalAbbr === "NXS" ? idx % 2 === 0 : idx % 2 !== 0;
+  });
+  const terminalPendingBookings = PENDING_BOOKINGS.filter((b, idx) => {
     return terminalAbbr === "NXS" ? idx % 2 === 0 : idx % 2 !== 0;
   });
 
@@ -254,12 +265,51 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
     return Object.values(map).sort((a, b) => a.key.localeCompare(b.key));
   })();
 
+  // ── BOOK — advance nomination → gate-in reconciliation ────────────────────────
+  const BOOK_MATCHED = LEDGER
+    .filter(l => l.direction === "Import")
+    .sort((a, b) => b.arrival_date.localeCompare(a.arrival_date))
+    .slice(0, 15)
+    .map(l => {
+      const leadDays = seedLeadDays(l.container_id);
+      const d = new Date(l.arrival_date);
+      d.setDate(d.getDate() - leadDays);
+      return {
+        container_id: l.container_id, container_no: l.container_no, size: l.size, teu: l.teu,
+        consignee: l.consignee, cha: l.cha, line: l.line,
+        nomination_date: d.toISOString().slice(0, 10), gate_in_date: l.arrival_date, leadDays,
+      };
+    });
+
+  const BOOK_PENDING = terminalPendingBookings.map(b => {
+    const daysPending = Math.max(0, Math.round((new Date(TODAY) - new Date(b.nomination_date)) / 86400000));
+    return {
+      ...b,
+      teu: b.size === 20 ? 1 : 2,
+      daysPending,
+      overdue: daysPending > BOOKING_SLA_DAYS,
+    };
+  }).sort((a, b) => b.daysPending - a.daysPending);
+
+  const bookOverdue = BOOK_PENDING.filter(b => b.overdue);
+  const BOOK_STATS = {
+    nominatedCount: BOOK_MATCHED.length + BOOK_PENDING.length,
+    matchedCount: BOOK_MATCHED.length,
+    pendingCount: BOOK_PENDING.length,
+    overdueCount: bookOverdue.length,
+    conversionPct: Math.round((BOOK_MATCHED.length / (BOOK_MATCHED.length + BOOK_PENDING.length)) * 100),
+    avgLeadTime: (BOOK_MATCHED.reduce((s, b) => s + b.leadDays, 0) / (BOOK_MATCHED.length || 1)).toFixed(1),
+    teuAtRisk: bookOverdue.reduce((s, b) => s + b.teu, 0),
+  };
+
   const TOTALS = (() => {
     const revenue = LEDGER.reduce((s, l) => s + l.invoiced, 0);
     const cost = LEDGER.reduce((s, l) => s + l.cost, 0);
     const teuTotal = LEDGER.reduce((s, l) => s + l.teu, 0);
     return { revenue, cost, margin: revenue - cost, teu: teuTotal, boxes: LEDGER.length };
   })();
+
+  BOOK_STATS.revenueAtRisk = Math.round(BOOK_STATS.teuAtRisk * (TOTALS.teu ? TOTALS.revenue / TOTALS.teu : 0));
 
   const closedImport = LEDGER.filter(l => !l.in_yard && l.direction === "Import");
   const totalGroundRent = LEDGER.reduce((s, l) => s + l.groundRentCharged, 0);
@@ -285,6 +335,9 @@ export function getComputations(terminalAbbr, rateOverrides = {}) {
     MONTHLY_THROUGHPUT,
     TOTALS,
     DWELL_SUMMARY,
+    BOOK_MATCHED,
+    BOOK_PENDING,
+    BOOK_STATS,
   };
 }
 
