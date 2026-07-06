@@ -160,6 +160,15 @@ All amounts in INR. HS chapters and drawback rates are simplified but realistic.
 | `npm run preview`| Preview production build locally        |
 | `node server.js`| Start the required AI proxy backend      |
 
+## Deploying to GitHub Pages
+
+GitHub Pages only serves static files, so only the frontend can be hosted there — the Express proxy (`server.js`) that holds `ANTHROPIC_API_KEY` needs to run somewhere with a Node runtime (Render, Railway, Fly.io, a VM, etc.).
+
+1. **Deploy the backend** to a Node host of your choice. Set its `ANTHROPIC_API_KEY` there, and set `FRONTEND_URL` to your Pages URL (e.g. `https://<user>.github.io`) — comma-separate multiple values if you also want local dev to keep working (`http://localhost:5173,https://<user>.github.io`).
+2. **Point the frontend at that backend** by setting the repository variable `VITE_API_BASE_URL` (Settings → Secrets and variables → Actions → Variables) to the backend's base URL, e.g. `https://your-backend.onrender.com`. Leave it unset for a static-only demo (the AI `query` tab will show a "proxy not reachable" error; everything else still works off the synthetic dataset).
+3. **Enable Pages**: repo Settings → Pages → Source: "GitHub Actions".
+4. Push to `main` (or run the workflow manually) — `.github/workflows/deploy-pages.yml` builds the Vite app with the correct `/<repo-name>/` base path and `VITE_API_BASE_URL`, then publishes `dist/` to Pages.
+
 ## Notes & Limitations
 
 - **Demo / internal tool** — 100% synthetic data.
