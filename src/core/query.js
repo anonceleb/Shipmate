@@ -17,7 +17,8 @@ export function useClaudeQuery(buildSystem, maxTokens = 2000) {
     setLoading(true);
     setResult(null);
     try {
-      const res = await fetch("/api/claude", {
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "";
+      const res = await fetch(`${apiBase}/api/claude`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
