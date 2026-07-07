@@ -62,6 +62,11 @@ export default function App({ onSwitch }) {
     try { const s = localStorage.getItem("cff_settle_payments"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
 
+  const [billRegister, setBillRegister] = useState(() => {
+    try { const s = localStorage.getItem("cff_bill_register"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [billIssued, setBillIssued] = useState({});
+
   const [quoteLane, setQuoteLane] = useState("Export");
   const [quoteOrigin, setQuoteOrigin] = useState("");
   const [quoteDest, setQuoteDest] = useState("");
@@ -330,6 +335,46 @@ Use INR formatting for monetary values (include ₹ symbol).`;
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // ── Bill — job invoicing for completed jobs ───────────────────────────────────
+  const isJobInvoiced = jobId => !!(billIssued[jobId] || billRegister.find(b => b.job_id === jobId));
+
+  const issueJobInvoice = job => {
+    const client = clientById[job.client_id];
+    const n = billRegister.length + 1;
+    const ref = `CFF/INV/${String(n).padStart(4, "0")}`;
+    const gst = Math.round(job.revenue * 0.18);
+    const total = job.revenue + gst;
+    const entry = { ref, job_id: job.job_id, client_id: job.client_id, clientName: client?.name || "—", revenue: job.revenue, gst, total, date: new Date().toISOString().slice(0, 10) };
+    const next = [...billRegister, entry];
+    setBillRegister(next);
+    localStorage.setItem("cff_bill_register", JSON.stringify(next));
+    setBillIssued(prev => ({ ...prev, [job.job_id]: ref }));
+    printArtifact("Tax Invoice", `
+      <h2>Tax Invoice</h2>
+      <p>To: <b>${client?.name}</b></p>
+      <table>
+        <tr><td>Job ID</td><td><b>${job.job_id}</b></td></tr>
+        <tr><td>Mode</td><td>${job.mode}</td></tr>
+        <tr><td>Trade Lane</td><td>${job.trade_lane}</td></tr>
+        <tr><td>Origin → Destination</td><td>${job.origin} → ${job.destination}</td></tr>
+        <tr><td>Job Date</td><td>${job.job_date}</td></tr>
+      </table>
+      <table>
+        <tr><th>Description</th><th>Amount (₹)</th></tr>
+        <tr><td>Freight forwarding services — ${job.mode}</td><td>${fmt(job.revenue)}</td></tr>
+        <tr><td>GST @ 18%</td><td>${fmt(gst)}</td></tr>
+        <tr><th>Total payable</th><th>₹${fmt(total)}</th></tr>
+      </table>
+      <p>Payment due within 30 days of invoice date. GSTIN: 33AAACL1234F1Z5</p>`, ref);
+    setToastMessage(`Invoice ${ref} issued — ₹${fmt(total)} (incl. GST)`);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  const pendingBillJobs = completedJobs.filter(j => !isJobInvoiced(j.job_id));
+  const invoicedJobs = billRegister;
+  const totalBilled = billRegister.reduce((s, b) => s + b.total, 0);
+  const totalPendingRevenue = pendingBillJobs.reduce((s, j) => s + j.revenue, 0);
+
   // ── Settle — CFF fee receivables from filed drawback claims ──────────────────
   const cffFeesByClient = {};
   filingRegister.forEach(r => {
@@ -379,7 +424,9 @@ Use INR formatting for monetary values (include ₹ symbol).`;
       sub: overdueJobs.length > 0 ? `${overdueJobs.length} overdue` : `${inProgressJobs.length} in progress`,
       subColor: overdueJobs.length > 0 ? C.red : C.yellow },
     { id: "operate",  label: "Operate",  hint: "compliance check & pre-filing", sub: `${amendCount} filings amended`, subColor: C.yellow },
-    { id: "bill",     label: "Bill",     hint: "job billing — not yet built", gap: true, sub: "roadmap" },
+    { id: "bill",     label: "Bill",     hint: "job invoicing — issue tax invoices for completed jobs",
+      sub: pendingBillJobs.length ? `${pendingBillJobs.length} uninvoiced` : "all invoiced",
+      subColor: pendingBillJobs.length ? C.red : C.green },
     { id: "recover",  label: "Recover",  hint: "duty drawback & filing register", sub: `₹${fmt(totalUnclaimedDrawback)} recoverable`, subColor: C.red },
     { id: "settle",   label: "Settle",   hint: "collect CFF fees — outstanding against filed claims",
       sub: SETTLE_OUTSTANDING.length ? `₹${fmt(totalSettleOutstanding)} outstanding` : "all collected",
@@ -978,6 +1025,93 @@ Use INR formatting for monetary values (include ₹ symbol).`;
 
           </div>
         )}
+        {/* ── BILL — job invoicing ── */}
+        {activeTab === "bill" && (
+          <>
+            <StageHeader
+              title="Job invoicing"
+              stat={`${pendingBillJobs.length} uninvoiced · ${billRegister.length} issued · ₹${fmt(totalBilled)} billed this session`}
+            />
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
+              {[
+                ["Completed jobs", completedJobs.length, C.text],
+                ["Invoiced", billRegister.length, C.green],
+                ["Pending invoice", pendingBillJobs.length, pendingBillJobs.length > 0 ? C.red : C.green],
+                ["Billed this session", `₹${fmt(totalBilled)}`, C.accent],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Space Mono', monospace", color }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px" }}>
+                  Completed jobs — pending invoice {pendingBillJobs.length > 0 && `· ₹${fmt(totalPendingRevenue)} revenue to bill`}
+                </div>
+                {pendingBillJobs.length > 1 && (
+                  <button
+                    onClick={() => pendingBillJobs.forEach(j => !isJobInvoiced(j.job_id) && issueJobInvoice(j))}
+                    style={{ padding: "7px 16px", borderRadius: 7, border: "none", background: C.accent, color: "#000", fontWeight: 700, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}
+                  >
+                    Issue all {pendingBillJobs.length} invoices →
+                  </button>
+                )}
+              </div>
+              {pendingBillJobs.length === 0 ? (
+                <div style={{ color: C.green, fontSize: 13 }}>✓ All completed jobs have been invoiced this session.</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    {["Job", "Client", "Route / Mode", "Job date", "Revenue", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 4 ? "right" : "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{pendingBillJobs.map(job => (
+                    <tr key={job.job_id}>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace", color: C.accent }}>{job.job_id}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}` }}>{clientById[job.client_id]?.name}</td>
+                      <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, color: C.muted }}>{job.origin} → {job.destination} · {job.mode}</td>
+                      <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace" }}>{job.job_date}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace", fontWeight: 700 }}>₹{fmt(job.revenue)}</td>
+                      <td style={{ padding: "10px", borderBottom: `1px solid ${C.border}`, textAlign: "right" }}>
+                        <button style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }} onClick={() => issueJobInvoice(job)}>Issue invoice →</button>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+
+            {billRegister.length > 0 && (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Issued invoices — this session</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    {["Invoice ref", "Client", "Job", "Revenue", "GST (18%)", "Total", "Date"].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 3 ? "right" : "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{billRegister.map(b => (
+                    <tr key={b.ref}>
+                      <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace", color: C.accent }}>{b.ref}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}` }}>{b.clientName}</td>
+                      <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace" }}>{b.job_id}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace" }}>₹{fmt(b.revenue)}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace", color: C.muted }}>₹{fmt(b.gst)}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace", fontWeight: 700, color: C.green }}>₹{fmt(b.total)}</td>
+                      <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace", color: C.muted }}>{b.date}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+
         {/* ── SETTLE — CFF fee collections ── */}
         {activeTab === "settle" && (
           <>

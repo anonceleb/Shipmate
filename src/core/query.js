@@ -17,12 +17,14 @@ export function useClaudeQuery(buildSystem, maxTokens = 2000) {
     setLoading(true);
     setResult(null);
     try {
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "";
-      const res = await fetch(`${apiBase}/api/claude`, {
+      const url = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+        ? "http://localhost:3001/api/claude"
+        : "/api/claude";
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "claude-3-5-sonnet-latest",
           max_tokens: maxTokens,
           system: buildSystem(qText),
           messages: [{ role: "user", content: qText }],

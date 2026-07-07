@@ -4,7 +4,24 @@
       "Bash(gh pr *)",
       "Bash(npm install *)",
       "Bash(npm run *)",
-      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__send_later"
+      "WebFetch(domain:www.sattva.in)",
+      "Bash(python3 -c \"import fitz\")",
+      "Read(//private/tmp/**)",
+      "Bash(python3 -)",
+      "WebFetch(domain:pando.in)",
+      "WebSearch",
+      "WebFetch(domain:pando.ai)",
+      "WebFetch(domain:www.lokad.com)",
+      "mcp__visualize__read_me",
+      "Bash(python3 -c ' *)",
+      "mcp__visualize__show_widget",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npx vite *)",
+      "Bash(git -C /Users/ashwin/Streak/Shipmate status)",
+      "Bash(git -C /Users/ashwin/Streak/Shipmate log --oneline -3)",
+      "Bash(git -C /Users/ashwin/Streak/Shipmate diff src/cfs/constants.js src/cfs/computations.js src/cfs/CfsApp.jsx vite.config.js --stat)",
+      "Bash(grep -E '\\\\.\\(tsx|ts|js\\)$')",
+      "Bash(npx eslint *)"
     ]
   }
 }
