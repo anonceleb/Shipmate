@@ -10,7 +10,7 @@ const MODULES = [
     accent: "#E8A838", initials: "CFF",
   },
   {
-    id: "cfs", title: "Nexus CFS Intelligence", tag: "CONTAINER FREIGHT STATION",
+    id: "cfs", title: "CFS Analytics Intelligence", tag: "CONTAINER FREIGHT STATION",
     desc: "Northgate Container Terminal, Manali — tariff reconciliation & leakage recovery, dwell & ground rent, Section 48 auction track, activity-based profitability.",
     accent: "#1a9fd9", initials: "NXS",
   },

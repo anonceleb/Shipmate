@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { BarChart, Bar, XAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 import ScorecardModal from "./components/ScorecardModal.jsx";
@@ -8,7 +8,17 @@ import ProfitabilityTab from "./components/ProfitabilityTab.jsx";
 import { CLIENTS, JOBS, CUSTOMS_FILINGS, WAREHOUSE, SCHEMA_DESC, C, applyTheme, DRAWBACK_RATES, DRAWBACK_CLAIMS, BASELINE_METRICS, QUOTES, SAMPLE_QUESTIONS } from "./data/constants.js";
 import { JOB_CLIENT_MAP, COMPLIANCE_RISK, WAREHOUSE_STATS, fmt, pct } from "./utils/computations.js";
 import { useClaudeQuery } from "./core/query.js";
+import { buildPrintableHtml } from "./core/artifacts.js";
 import { LifecycleShell } from "./core/LifecycleShell.jsx";
+
+const CFF_TERMINAL = {
+  abbr: "CFF",
+  name: "COMBINED FREIGHT FORWARDERS PVT LTD",
+  label: "CFF Analytics Intelligence",
+  address: "Combined Freight Forwarders · No.45, Greams Road, Chennai-600006",
+  color: "#E8A838",
+};
+const CFF_BOOKING_SLA_DAYS = 14;
 
 const StageHeader = ({ title, stat }) => (
   <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
@@ -38,6 +48,18 @@ export default function App({ onSwitch }) {
   });
   const [filingRegister, setFilingRegister] = useState(() => {
     try { const s = localStorage.getItem("cff_filing_register"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+
+  const [printDoc, setPrintDoc] = useState(null);
+  const printDocRef = useRef(null);
+
+  const [bookingRegister, setBookingRegister] = useState(() => {
+    try { const s = localStorage.getItem("cff_booking_register"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [bookingConfirmed, setBookingConfirmed] = useState({});
+
+  const [settlePayments, setSettlePayments] = useState(() => {
+    try { const s = localStorage.getItem("cff_settle_payments"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
 
   const [quoteLane, setQuoteLane] = useState("Export");
@@ -272,14 +294,96 @@ Use INR formatting for monetary values (include ₹ symbol).`;
   const highRiskClients = COMPLIANCE_RISK.filter(r => r.level === "High");
   const sessionRecovered = filingRegister.reduce((s, r) => s + (r.eligible_amount || 0), 0);
 
+  // ── Book — overdue tracking & booking confirmations ──────────────────────────
+  const overdueJobs = inProgressJobs.filter(j =>
+    Math.floor((new Date() - new Date(j.job_date)) / 86400000) > CFF_BOOKING_SLA_DAYS
+  );
+
+  const printArtifact = (title, bodyHtml, refNo) => {
+    setPrintDoc({ title, html: buildPrintableHtml(CFF_TERMINAL, title, bodyHtml, refNo) });
+  };
+
+  const issueBookingConfirmation = job => {
+    const client = clientById[job.client_id];
+    const n = bookingRegister.length + 1;
+    const ref = `CFF/BKNG/${String(n).padStart(4, "0")}`;
+    const daysElapsed = Math.floor((new Date() - new Date(job.job_date)) / 86400000);
+    const entry = { ref, job_id: job.job_id, client_id: job.client_id, clientName: client?.name || "—", date: new Date().toISOString().slice(0, 10) };
+    const next = [...bookingRegister, entry];
+    setBookingRegister(next);
+    localStorage.setItem("cff_booking_register", JSON.stringify(next));
+    setBookingConfirmed(prev => ({ ...prev, [job.job_id]: ref }));
+    printArtifact("Booking Confirmation", `
+      <h2>Booking Confirmation</h2>
+      <p>To: <b>${client?.name}</b></p>
+      <p>This confirms that CFF has registered and is actively processing the following shipment:</p>
+      <table>
+        <tr><td>Job ID</td><td><b>${job.job_id}</b></td></tr>
+        <tr><td>Mode</td><td>${job.mode}</td></tr>
+        <tr><td>Trade Lane</td><td>${job.trade_lane}</td></tr>
+        <tr><td>Origin → Destination</td><td>${job.origin} → ${job.destination}</td></tr>
+        <tr><td>Job Date</td><td>${job.job_date}</td></tr>
+        <tr><td>Days Active</td><td>${daysElapsed}</td></tr>
+      </table>
+      <p>Our team is coordinating documentation, customs, and freight. Please revert to confirm receipt.</p>`, ref);
+    setToastMessage(`Booking confirmation ${ref} issued`);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  // ── Settle — CFF fee receivables from filed drawback claims ──────────────────
+  const cffFeesByClient = {};
+  filingRegister.forEach(r => {
+    if (!cffFeesByClient[r.client_id])
+      cffFeesByClient[r.client_id] = { client_id: r.client_id, clientName: clientById[r.client_id]?.name || "—", entries: [], totalFees: 0 };
+    cffFeesByClient[r.client_id].entries.push(r);
+    cffFeesByClient[r.client_id].totalFees += r.cff_fee || 0;
+  });
+  const paidByClient = {};
+  settlePayments.forEach(p => { paidByClient[p.client_id] = (paidByClient[p.client_id] || 0) + (p.amount || 0); });
+  const SETTLE_OUTSTANDING = Object.values(cffFeesByClient)
+    .map(g => ({ ...g, paid: paidByClient[g.client_id] || 0, outstanding: Math.max(0, g.totalFees - (paidByClient[g.client_id] || 0)) }))
+    .filter(g => g.outstanding > 0.5)
+    .sort((a, b) => b.outstanding - a.outstanding);
+  const SETTLE_SETTLED = Object.values(cffFeesByClient)
+    .map(g => ({ ...g, paid: paidByClient[g.client_id] || 0 }))
+    .filter(g => g.totalFees > 0 && (paidByClient[g.client_id] || 0) >= g.totalFees - 0.5 && settlePayments.some(p => p.client_id === g.client_id));
+  const totalSettleOutstanding = SETTLE_OUTSTANDING.reduce((s, g) => s + g.outstanding, 0);
+  const totalSettleCollected = settlePayments.reduce((s, p) => s + (p.amount || 0), 0);
+
+  const issueSettleReceipt = g => {
+    const n = settlePayments.length + 1;
+    const ref = `CFF/RCPT/${String(n).padStart(4, "0")}`;
+    const totalEligible = g.entries.reduce((s, e) => s + (e.eligible_amount || 0), 0);
+    const entry = { ref, client_id: g.client_id, clientName: g.clientName, claim_count: g.entries.length, amount: g.outstanding, date: new Date().toISOString().slice(0, 10) };
+    const next = [...settlePayments, entry];
+    setSettlePayments(next);
+    localStorage.setItem("cff_settle_payments", JSON.stringify(next));
+    printArtifact("Payment Receipt", `
+      <h2>Payment Receipt — CFF Professional Fees</h2>
+      <p>Received from: <b>${g.clientName}</b></p>
+      <table>
+        <tr><th>Reg ID</th><th>Eligible Amount (₹)</th><th>CFF Fee (₹)</th><th>Filed Date</th></tr>
+        ${g.entries.map(e => `<tr><td>${e.register_id}</td><td>${fmt(e.eligible_amount)}</td><td>${fmt(e.cff_fee)}</td><td>${e.filed_date}</td></tr>`).join("")}
+        <tr><th>Total CFF fees received</th><td></td><th>₹${fmt(g.outstanding)}</th><td></td></tr>
+      </table>
+      <p>Based on ${g.entries.length} filed duty drawback claim${g.entries.length !== 1 ? "s" : ""} totalling ₹${fmt(totalEligible)} eligible amount. CFF professional fee at 18%.</p>
+      <p>This receipt confirms full settlement of outstanding CFF professional fees for duty drawback filing services.</p>`, ref);
+    setToastMessage(`Payment receipt ${ref} issued — ₹${fmt(g.outstanding)} collected from ${g.clientName}`);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
   const CFF_STAGES = [
     { id: "overview", label: "Overview", hint: "why this exists — three numbers", sub: "the business case" },
     { id: "quote",    label: "Quote",    hint: "price the job — quoting intelligence", sub: `${pipelineArray.length} in pipeline` },
-    { id: "book",     label: "Book",     hint: "open the job — explore & track", sub: `${inProgressJobs.length} in progress` },
+    { id: "book",     label: "Book",     hint: "open the job — booking confirmations & SLA",
+      sub: overdueJobs.length > 0 ? `${overdueJobs.length} overdue` : `${inProgressJobs.length} in progress`,
+      subColor: overdueJobs.length > 0 ? C.red : C.yellow },
     { id: "operate",  label: "Operate",  hint: "compliance check & pre-filing", sub: `${amendCount} filings amended`, subColor: C.yellow },
     { id: "bill",     label: "Bill",     hint: "job billing — not yet built", gap: true, sub: "roadmap" },
     { id: "recover",  label: "Recover",  hint: "duty drawback & filing register", sub: `₹${fmt(totalUnclaimedDrawback)} recoverable`, subColor: C.red },
-    { id: "settle",   label: "Settle",   hint: "collect payment — not yet built", gap: true, sub: "roadmap" },
+    { id: "settle",   label: "Settle",   hint: "collect CFF fees — outstanding against filed claims",
+      sub: SETTLE_OUTSTANDING.length ? `₹${fmt(totalSettleOutstanding)} outstanding` : "all collected",
+      subColor: SETTLE_OUTSTANDING.length ? C.yellow : C.green },
   ];
   const CFF_RAILS = [
     { id: "intelligence",  label: "Intelligence" },
@@ -312,6 +416,25 @@ Use INR formatting for monetary values (include ₹ symbol).`;
           100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
         }
       `}</style>
+      {/* ── Printable document viewer ── */}
+      {printDoc && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", zIndex: 3000 }}>
+          <div style={{ width: "100%", maxWidth: 860, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 8px 10px" }}>
+            <span style={{ color: "#fff", fontWeight: 600, fontSize: 14 }}>{printDoc.title}</span>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => printDocRef.current?.contentWindow?.print()} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 11 }}>Print / Save PDF</button>
+              <button onClick={() => setPrintDoc(null)} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #444", background: "transparent", color: "#aaa", cursor: "pointer", fontSize: 11 }}>Close</button>
+            </div>
+          </div>
+          <iframe
+            ref={printDocRef}
+            srcDoc={printDoc.html}
+            style={{ width: "100%", maxWidth: 860, height: "82vh", border: "none", borderRadius: 10, background: "#fff" }}
+            title={printDoc.title}
+          />
+        </div>
+      )}
+
       {scorecardId && <ScorecardModal clientId={scorecardId} onClose={() => setScorecardId(null)} />}
       {draftClaim && (
         <div onClick={() => setDraftClaim(null)} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
@@ -586,28 +709,66 @@ Use INR formatting for monetary values (include ₹ symbol).`;
         )}
         {activeTab === "book" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-            <StageHeader title="Open jobs" stat={`${inProgressJobs.length} in progress · ${JOBS.length} total on file`} />
-            {/* In Progress Tracker */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-              {JOBS.filter(j => j.status === "In Progress").map(job => {
-                const client = clientById[job.client_id];
-                const daysElapsed = Math.floor((new Date() - new Date(job.job_date)) / (1000 * 60 * 60 * 24));
-                return (
-                  <div key={job.job_id} style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, borderLeft: `4px solid ${C.accent}`, padding: 20 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 14, color: C.text }}>{job.job_id}</span>
-                      <span style={{ fontSize: 12, background: C.accentDim, color: C.accent, padding: "2px 8px", borderRadius: 12 }}>{daysElapsed} days active</span>
-                    </div>
-                    <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>{client?.name}</div>
-                    <div style={{ fontSize: 13, color: C.muted }}>{job.origin} → {job.destination} • {job.mode}</div>
-                  </div>
-                );
-              })}
+            <StageHeader title="Job pipeline" stat={`${inProgressJobs.length} in progress · ${overdueJobs.length} overdue · ${JOBS.length} total`} />
+
+            {/* KPI tiles */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+              {[
+                ["Total jobs", JOBS.length, C.text],
+                ["In progress", inProgressJobs.length, C.yellow],
+                ["Completed (FY)", completedJobs.length, C.accent],
+                [`Overdue (>${CFF_BOOKING_SLA_DAYS}d)`, overdueJobs.length, overdueJobs.length > 0 ? C.red : C.green],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'Space Mono', monospace", color }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* In-progress jobs with booking confirmation */}
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>In-progress jobs — {CFF_BOOKING_SLA_DAYS}-day SLA</div>
+              {inProgressJobs.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No jobs currently in progress.</div>}
+              {inProgressJobs.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    {["Job", "Client", "Route / Mode", "Job date", "Days active", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 4 ? "right" : "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{inProgressJobs.map(job => {
+                    const client = clientById[job.client_id];
+                    const daysElapsed = Math.floor((new Date() - new Date(job.job_date)) / 86400000);
+                    const isOverdue = daysElapsed > CFF_BOOKING_SLA_DAYS;
+                    const confirmed = bookingConfirmed[job.job_id] || bookingRegister.find(b => b.job_id === job.job_id)?.ref;
+                    return (
+                      <tr key={job.job_id}>
+                        <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace", color: C.accent }}>{job.job_id}</td>
+                        <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}` }}>{client?.name}</td>
+                        <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, color: C.muted }}>{job.origin} → {job.destination} · {job.mode}</td>
+                        <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace" }}>{job.job_date}</td>
+                        <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace", fontWeight: 700, color: isOverdue ? C.red : daysElapsed > 7 ? C.yellow : C.green }}>{daysElapsed}d</td>
+                        <td style={{ padding: "10px", borderBottom: `1px solid ${C.border}`, textAlign: "right" }}>
+                          {confirmed
+                            ? <span style={{ fontSize: 12, color: C.green }}>✓ Confirmed · {confirmed}</span>
+                            : <button style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }} onClick={() => issueBookingConfirmation(job)}>Send booking confirmation →</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              )}
+              {overdueJobs.length > 0 && (
+                <div style={{ marginTop: 14, fontSize: 12, color: C.red }}>
+                  {overdueJobs.length} job{overdueJobs.length > 1 ? "s" : ""} past the {CFF_BOOKING_SLA_DAYS}-day SLA — send booking confirmations and follow up with the shipping line.
+                </div>
+              )}
             </div>
 
             {/* Filter Bar */}
             <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, padding: 20 }}>
-              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12 }}>Filter & Explore Jobs</div>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12 }}>Filter & explore all jobs</div>
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                 <select value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ padding: "10px", borderRadius: 8, background: C.surface, color: C.text, border: `1px solid ${C.border}`, outline: "none", cursor: "pointer" }}>
                   <option value="All">All Clients</option>
@@ -630,37 +791,35 @@ Use INR formatting for monetary values (include ₹ symbol).`;
               </div>
             </div>
 
-            {/* Interactive Table */}
+            {/* Jobs table */}
             <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr style={{ background: C.surface }}>
                       {["job_id", "client_id", "mode", "trade_lane", "job_date", "revenue", "status"].map(col => (
-                        <th key={col} onClick={() => handleSort(col)} style={{ padding: "12px 16px", textAlign: "left", color: sortCol === col ? C.accent : C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", transition: "color 0.2s" }} onMouseEnter={e => e.target.style.color = C.accent} onMouseLeave={e => e.target.style.color = sortCol === col ? C.accent : C.muted}>
+                        <th key={col} onClick={() => handleSort(col)} style={{ padding: "12px 16px", textAlign: "left", color: sortCol === col ? C.accent : C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }} onMouseEnter={e => e.target.style.color = C.accent} onMouseLeave={e => e.target.style.color = sortCol === col ? C.accent : C.muted}>
                           {col.replaceAll("_", " ")} {sortCol === col ? (sortAsc ? "↑" : "↓") : ""}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredJobs.map((job, i) => (
-                      <tr key={job.job_id} style={{ borderBottom: `1px solid ${C.border}80`, transition: "background 0.2s" }} onMouseEnter={e => e.currentTarget.style.background = C.surface} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    {filteredJobs.map(job => (
+                      <tr key={job.job_id} style={{ borderBottom: `1px solid ${C.border}80` }} onMouseEnter={e => e.currentTarget.style.background = C.surface} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                         <td style={{ padding: "12px 16px", color: C.text, fontFamily: "'Space Mono', monospace" }}>{job.job_id}</td>
-                        <td style={{ padding: "12px 16px", color: C.text }}>{clientById[job.client_id]?.name}</td>
+                        <td style={{ padding: "12px 16px" }}>{clientById[job.client_id]?.name}</td>
                         <td style={{ padding: "12px 16px", color: C.muted }}>{job.mode}</td>
                         <td style={{ padding: "12px 16px", color: C.muted }}>{job.trade_lane}</td>
                         <td style={{ padding: "12px 16px", color: C.muted }}>{job.job_date}</td>
-                        <td style={{ padding: "12px 16px", color: C.text }}>₹{fmt(job.revenue)}</td>
+                        <td style={{ padding: "12px 16px" }}>₹{fmt(job.revenue)}</td>
                         <td style={{ padding: "12px 16px" }}>
                           <span style={{ fontSize: 11, background: job.status === "Completed" ? "#2ECC7120" : C.accentDim, color: job.status === "Completed" ? C.green : C.accent, padding: "4px 8px", borderRadius: 12 }}>{job.status}</span>
                         </td>
                       </tr>
                     ))}
                     {filteredJobs.length === 0 && (
-                      <tr>
-                        <td colSpan={7} style={{ padding: "32px", textAlign: "center", color: C.muted }}>No jobs match your filters.</td>
-                      </tr>
+                      <tr><td colSpan={7} style={{ padding: "32px", textAlign: "center", color: C.muted }}>No jobs match your filters.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -819,6 +978,87 @@ Use INR formatting for monetary values (include ₹ symbol).`;
 
           </div>
         )}
+        {/* ── SETTLE — CFF fee collections ── */}
+        {activeTab === "settle" && (
+          <>
+            <StageHeader
+              title="Collections"
+              stat={`₹${fmt(totalSettleOutstanding)} outstanding · ${SETTLE_OUTSTANDING.length} client${SETTLE_OUTSTANDING.length === 1 ? "" : "s"} · ₹${fmt(totalSettleCollected)} collected this session`}
+            />
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
+              {[
+                ["CFF fees outstanding", `₹${fmt(totalSettleOutstanding)}`, totalSettleOutstanding > 0 ? C.red : C.green],
+                ["Clients outstanding", SETTLE_OUTSTANDING.length, C.text],
+                ["Claims filed (basis)", filingRegister.length, C.accent],
+                ["Collected this session", `₹${fmt(totalSettleCollected)}`, C.green],
+              ].map(([label, value, color]) => (
+                <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'Space Mono', monospace", color }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Outstanding CFF fees — against filed drawback claims (18% of eligible)</div>
+              {filingRegister.length === 0 && (
+                <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 40, textAlign: "center", color: C.muted, fontSize: 14 }}>
+                  No claims filed yet. File drawback claims from{" "}
+                  <a href="#" onClick={e => { e.preventDefault(); setActiveTab("recover"); }} style={{ color: C.accent }}>Recover</a>{" "}
+                  and the outstanding CFF fees land here for collection.
+                </div>
+              )}
+              {filingRegister.length > 0 && SETTLE_OUTSTANDING.length === 0 && (
+                <div style={{ color: C.green, fontSize: 13 }}>✓ All CFF fees collected from clients this session.</div>
+              )}
+              {SETTLE_OUTSTANDING.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    {["Client", "Claims", "Eligible drawn", "CFF fee due (18%)", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 1 && i <= 3 ? "right" : "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{SETTLE_OUTSTANDING.map(g => {
+                    const totalEligible = g.entries.reduce((s, e) => s + (e.eligible_amount || 0), 0);
+                    return (
+                      <tr key={g.client_id}>
+                        <td style={{ padding: "10px", fontSize: 14, borderBottom: `1px solid ${C.border}` }}>{g.clientName}</td>
+                        <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace" }}>{g.entries.length}</td>
+                        <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace" }}>₹{fmt(totalEligible)}</td>
+                        <td style={{ padding: "10px", fontSize: 14, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace", fontWeight: 700 }}>₹{fmt(g.outstanding)}</td>
+                        <td style={{ padding: "10px", borderBottom: `1px solid ${C.border}`, textAlign: "right" }}>
+                          <button style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }} onClick={() => issueSettleReceipt(g)}>Record payment →</button>
+                        </td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              )}
+            </div>
+
+            {settlePayments.length > 0 && (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Recently settled — this session</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    {["Client", "Amount collected", "Receipt · Date"].map((h, i) => (
+                      <th key={i} style={{ textAlign: i === 1 ? "right" : "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{settlePayments.map(p => (
+                    <tr key={p.ref}>
+                      <td style={{ padding: "10px", fontSize: 14, borderBottom: `1px solid ${C.border}` }}>{p.clientName}</td>
+                      <td style={{ padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}`, textAlign: "right", fontFamily: "'Space Mono', monospace", color: C.green, fontWeight: 700 }}>₹{fmt(p.amount)}</td>
+                      <td style={{ padding: "10px", fontSize: 12, borderBottom: `1px solid ${C.border}`, fontFamily: "'Space Mono', monospace" }}>{p.ref} · {p.date}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+
         {/* ── OPERATE — compliance check & pre-filing ── */}
         {activeTab === "operate" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>

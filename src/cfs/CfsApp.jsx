@@ -542,7 +542,7 @@ export default function CfsApp({ onSwitch }) {
       )}
 
       <LifecycleShell
-        brand={{ abbr: terminal.abbr, name: `Nexus CFS Intelligence — ${terminal.label}`, subtitle: "OVERLAY ON EXISTING YARD & BILLING SYSTEMS · DEMO · SYNTHETIC DATA", color: terminal.color }}
+        brand={{ abbr: terminal.abbr, name: `CFS Analytics Intelligence — ${terminal.label}`, subtitle: "OVERLAY ON EXISTING YARD & BILLING SYSTEMS · DEMO · SYNTHETIC DATA", color: terminal.color }}
         stages={STAGES}
         rails={[
           { id: "intelligence",  label: "Intelligence" },
