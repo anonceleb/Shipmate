@@ -432,9 +432,12 @@ Use INR formatting for monetary values (include ₹ symbol).`;
       sub: SETTLE_OUTSTANDING.length ? `₹${fmt(totalSettleOutstanding)} outstanding` : "all collected",
       subColor: SETTLE_OUTSTANDING.length ? C.yellow : C.green },
   ];
+  const totalArtifacts = filingRegister.length + billRegister.length + bookingRegister.length + settlePayments.length;
+
   const CFF_RAILS = [
     { id: "intelligence",  label: "Intelligence" },
     { id: "profitability", label: "Profitability" },
+    { id: "register",      label: `Register · ${totalArtifacts} artifact${totalArtifacts === 1 ? "" : "s"}` },
   ];
 
   return (
@@ -590,7 +593,9 @@ Use INR formatting for monetary values (include ₹ symbol).`;
                 <div style={{ fontSize: 11, color: C.red, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, fontFamily: "'Space Mono', monospace" }}>Recoverable duty drawback</div>
                 <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "'Space Mono', monospace", color: C.red }}>₹{fmt(totalUnclaimedDrawback)}</div>
                 <div style={{ fontSize: 13, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>{unclaimedDrawbacks.length} of {claimsState.length} claims · CFF fee ₹{fmt(cffFee)} at 18%</div>
-                <button onClick={() => setActiveTab("recover")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.red}`, background: "transparent", color: C.red, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Recover it →</button>
+                {unclaimedDrawbacks.length > 0
+                  ? <button onClick={() => setActiveTab("recover")} style={{ marginTop: 18, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.red}`, background: "transparent", color: C.red, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit" }}>Recover it →</button>
+                  : <div style={{ marginTop: 18, fontSize: 13, color: C.green }}>✓ All claims filed</div>}
               </div>
               <div style={{ background: C.card, border: `1px solid ${C.yellow}`, borderRadius: 14, padding: 26 }}>
                 <div style={{ fontSize: 11, color: C.yellow, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 14, fontFamily: "'Space Mono', monospace" }}>Jobs in progress</div>
@@ -1671,6 +1676,131 @@ Use INR formatting for monetary values (include ₹ symbol).`;
             ))}
           </div>
         )}
+        {/* ── REGISTER rail ── */}
+        {activeTab === "register" && (() => {
+          const mono = { fontFamily: "'Space Mono', monospace" };
+          const TH = { textAlign: "left", padding: "9px 10px", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.6px", borderBottom: `1px solid ${C.border}` };
+          const TD = { padding: "10px", fontSize: 13, borderBottom: `1px solid ${C.border}` };
+
+          const clearAll = () => {
+            if (!window.confirm("Clear all session artifacts — filing register, invoices, booking confirmations, and payment receipts?")) return;
+            setFilingRegister([]);
+            setBillRegister([]);
+            setBookingRegister([]);
+            setSettlePayments([]);
+            setClaimsState(DRAWBACK_CLAIMS);
+            setBillIssued({});
+            setBookingConfirmed({});
+            localStorage.removeItem("cff_filing_register");
+            localStorage.removeItem("cff_bill_register");
+            localStorage.removeItem("cff_booking_register");
+            localStorage.removeItem("cff_settle_payments");
+            localStorage.removeItem("cff_claims");
+            setToastMessage("Session register cleared — all demo data reset");
+            setTimeout(() => setToastMessage(null), 4000);
+          };
+
+          return (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+                <StageHeader title="Action register" stat={totalArtifacts ? `${totalArtifacts} artifact${totalArtifacts === 1 ? "" : "s"} this session` : "no artifacts this session"} />
+                <button onClick={clearAll} style={{ padding: "8px 16px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+                  Clear session ↺
+                </button>
+              </div>
+
+              {totalArtifacts === 0 && (
+                <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 40, textAlign: "center", color: C.muted, fontSize: 14 }}>
+                  No artifacts issued yet this session. Work through the lifecycle stages and every action you take lands here.
+                </div>
+              )}
+
+              {filingRegister.length > 0 && (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Drawback claims filed ({filingRegister.length})</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr>
+                      {["Reg ID", "Claim", "Client", "HS Chapter", "Eligible ₹", "CFF fee ₹", "ICEGATE Ref", "Date"].map(h => <th key={h} style={TH}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>{filingRegister.map(r => (
+                      <tr key={r.register_id}>
+                        <td style={{ ...TD, ...mono, color: C.muted, fontSize: 12 }}>{r.register_id}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{r.claim_id}</td>
+                        <td style={TD}>{clientById[r.client_id]?.name || r.client_id}</td>
+                        <td style={{ ...TD, ...mono }}>{r.hs_chapter}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(r.eligible_amount)}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", color: C.green }}>₹{fmt(r.cff_fee)}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 11, color: C.muted }}>{r.icegate_ref}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12, color: C.muted }}>{r.filed_date}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+
+              {billRegister.length > 0 && (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Tax invoices issued ({billRegister.length}) · ₹{fmt(totalBilled)} total incl. GST</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr>
+                      {["Invoice", "Client", "Job", "Revenue ₹", "GST ₹", "Total ₹", "Date"].map(h => <th key={h} style={TH}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>{billRegister.map(b => (
+                      <tr key={b.ref}>
+                        <td style={{ ...TD, ...mono, color: C.accent, fontSize: 12 }}>{b.ref}</td>
+                        <td style={TD}>{b.clientName}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{b.job_id}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(b.revenue)}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", color: C.muted }}>₹{fmt(b.gst)}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700 }}>₹{fmt(b.total)}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12, color: C.muted }}>{b.date}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+
+              {bookingRegister.length > 0 && (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Booking confirmations ({bookingRegister.length})</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr>
+                      {["Ref", "Job", "Client", "Date"].map(h => <th key={h} style={TH}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>{bookingRegister.map(b => (
+                      <tr key={b.ref}>
+                        <td style={{ ...TD, ...mono, color: C.accent, fontSize: 12 }}>{b.ref}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{b.job_id}</td>
+                        <td style={TD}>{b.clientName}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12, color: C.muted }}>{b.date}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+
+              {settlePayments.length > 0 && (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20 }}>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 14 }}>Payment receipts ({settlePayments.length}) · ₹{fmt(totalSettleCollected)} collected</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr>
+                      {["Ref", "Client", "Amount ₹", "Date"].map(h => <th key={h} style={TH}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>{settlePayments.map(p => (
+                      <tr key={p.ref}>
+                        <td style={{ ...TD, ...mono, color: C.accent, fontSize: 12 }}>{p.ref}</td>
+                        <td style={TD}>{p.clientName}</td>
+                        <td style={{ ...TD, ...mono, textAlign: "right", color: C.green, fontWeight: 700 }}>₹{fmt(p.amount)}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12, color: C.muted }}>{p.date}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          );
+        })()}
+
       </LifecycleShell>
     </div>
   );
