@@ -53,7 +53,7 @@ export default async function handler(req, res) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: req.body.model || 'claude-3-5-sonnet-latest',
+        model: req.body.model || 'claude-sonnet-5',
         max_tokens: Math.min(req.body.max_tokens || 1024, 4096),
         system: req.body.system || 'You are a helpful assistant.',
         messages: req.body.messages || []

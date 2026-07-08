@@ -12,7 +12,7 @@ This interactive prototype lets operations, compliance, and commercial teams exp
 
 ### 🤖 AI Query Interface (`query` tab)
 Ask anything about clients, margins, lanes, compliance, or customs activity.  
-The app injects relevant slices of the live dataset plus the complete schema into a carefully engineered prompt. Claude 3.5 Sonnet returns a structured response containing:
+The app injects relevant slices of the live dataset plus the complete schema into a carefully engineered prompt. Claude returns a structured response containing:
 - Equivalent SQL
 - Plain-English summary with numbers
 - Relevant data table (3–8 rows)
@@ -52,7 +52,7 @@ Historical quoting intelligence by transport mode + commodity type:
 |-------------|-------------------------------------------------|
 | Frontend    | React 19, Vite 8, Recharts, custom dark theme   |
 | Backend     | Node.js + Express 5 (lightweight AI proxy only) |
-| AI          | Anthropic Claude 3.5 Sonnet (`claude-3-5-sonnet-20241022`) |
+| AI          | Anthropic Claude (`claude-sonnet-5`) |
 | Data        | 100% synthetic mock dataset (no external DB)    |
 | Persistence | Browser localStorage (`cff_claims`, `cff_filing_register`) |
 | Styling     | CSS variables + inline styles + Space Mono accents |
