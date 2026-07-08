@@ -169,6 +169,17 @@ GitHub Pages only serves static files, so only the frontend can be hosted there 
 3. **Enable Pages**: repo Settings → Pages → Source: "GitHub Actions".
 4. Push to `main` (or run the workflow manually) — `.github/workflows/deploy-pages.yml` builds the Vite app with the correct `/<repo-name>/` base path and `VITE_API_BASE_URL`, then publishes `dist/` to Pages.
 
+### Hosting the AI proxy on Vercel
+
+`api/claude.js` is a serverless-function equivalent of `server.js`, ready to deploy on Vercel with no cold-start sleep (unlike a free Render/Railway web service):
+
+1. Import this repo into Vercel ([vercel.com/new](https://vercel.com/new)) as a new project.
+2. In the project's Settings → Environment Variables, add:
+   - `ANTHROPIC_API_KEY` — your Anthropic key.
+   - `FRONTEND_URL` — your GitHub Pages origin, e.g. `https://<user>.github.io` (comma-separate to also allow `http://localhost:5173` for local dev).
+3. Deploy. Vercel will also build and serve the Vite frontend at the same URL (harmless bonus copy) — the endpoint you actually need is `https://<your-project>.vercel.app/api/claude`.
+4. Set the GitHub repository variable `VITE_API_BASE_URL` to that Vercel project URL (e.g. `https://your-project.vercel.app`), then re-run the Pages deploy workflow so the GitHub Pages build points at it.
+
 ## Notes & Limitations
 
 - **Demo / internal tool** — 100% synthetic data.
