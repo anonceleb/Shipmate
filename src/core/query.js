@@ -17,10 +17,10 @@ export function useClaudeQuery(buildSystem, maxTokens = 2000) {
     setLoading(true);
     setResult(null);
     try {
-      const url = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-        ? "http://localhost:3001/api/claude"
-        : "/api/claude";
-      const res = await fetch(url, {
+      const apiBase = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+        ? "http://localhost:3001"
+        : (import.meta.env.VITE_API_BASE_URL || "");
+      const res = await fetch(`${apiBase}/api/claude`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
