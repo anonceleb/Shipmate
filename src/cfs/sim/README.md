@@ -8,9 +8,23 @@ This document specifies the model precisely enough to be cited in academic work
 or an IP filing, and to be reproduced independently from this description alone.
 
 **Implementation:** `engine.ts` (model), `rng.ts` (stochastics), `types.ts`
-(domain types), `engine.test.ts` (49 unit tests). The engine is pure TypeScript
-with no rendering dependency; `../YardSimulator.jsx` is a presentation layer over
-it and contains no model logic.
+(domain types), `scenario.ts` (interactive scenario generation), and
+`engine.test.ts` + `scenario.test.ts` (91 unit tests). The engine is pure
+TypeScript with no rendering dependency; `../InteractiveYard.jsx` and
+`../BenchmarkYard.jsx` are presentation layers over it and contain no model
+logic.
+
+The module supports two modes, both driven by this engine:
+
+| | **Operate the Yard** (`scenario.ts`) | **Benchmark** (`engine.ts`) |
+|---|---|---|
+| Purpose | Teaching / demo — a person plays | Statistical proof of the claim |
+| Yard | 1 block, 8 slots × 2 tiers | 8 blocks, 96 slots × 2 tiers |
+| Horizon | 3 days, ~25 discrete events | 30 days, 720 hourly steps |
+| Advance | Turn-based; nothing moves until the operator acts | Auto-run at 1× / 5× / 20× |
+| Dwell | Compressed (§10.2) | Full-scale (§3.2) |
+
+§§1–9 below describe benchmark mode. §10 describes the interactive scenario.
 
 ---
 
@@ -309,3 +323,119 @@ Stated explicitly so that any citation is bounded correctly.
    representative planning figures, not measurements from a specific terminal.
    Any external citation should re-parameterise from the operator's own data —
    every one of these values is a named constant at the top of `engine.ts`.
+
+---
+
+## 10. Interactive scenario (`scenario.ts`)
+
+Benchmark mode answers *"does the rule pay?"* over 30 days and 96 slots.
+Interactive mode answers a different question — *"would you have done better?"* —
+by making the reader place the boxes themselves. The two share the rehandle
+definition and the cost model exactly; they differ in scale and in how time
+advances.
+
+### 10.1 Yard
+
+A single block of **8 ground slots × 2 tiers = 16 positions**, of which five
+slots are designated 20ft and three 40ft. Small enough that an operator can hold
+the entire yard state in their head, which is the precondition for the exercise
+teaching anything.
+
+The UI renders this as an **elevation (side-on) view** rather than the
+benchmark's top-down plan. "B is stacked on A" has to be literally visible for
+the lesson to land; a badge on a top-down cell does not carry it.
+
+### 10.2 Compressed dwell
+
+Interactive mode uses reduced dwell means, in hours:
+
+| Cargo type | Interactive mean | Benchmark mean |
+|---|---|---|
+| Import DPD | 14h | 2 days |
+| Import non-DPD | 46h | 6 days |
+| Export | 26h | 3 days |
+
+with log-space σ = 0.45 and bucket thresholds rescaled to match
+(short < 18h, medium 18–40h, long > 40h).
+
+**This is an accelerated teaching scenario, not a claim about real dwell.** At
+full-scale means a 3-day window would be almost entirely arrivals with hardly
+any pickups, so the operator would never experience a rehandle — the one thing
+the exercise exists to demonstrate. The compression preserves the ordering and
+the ratios that drive the stacking decision (DPD clears fastest, non-DPD
+slowest, export between) while fitting the whole arrival → pickup → rehandle
+cycle inside the window. Any citation of dwell figures should use §3.2, not this
+table.
+
+### 10.3 Event generation
+
+A scenario is a fixed list of ~25 events over 72 hours, generated once from a
+seed:
+
+- **Arrivals** — 13 per scenario, at instants drawn uniformly over the first 48
+  hours. Fixing the count rather than drawing it keeps every seed's demo a
+  predictable length; arrival *times* remain uniform over the window, which is
+  exactly the conditional distribution of a Poisson process given its arrival
+  count. It is therefore the same process as §3.1, observed at fixed N.
+- **Pickups** — derived from each container's actual dwell, fixed at generation.
+  Crucially, a pickup time **does not depend on where the box was placed**, so
+  the human operator and the policy face a byte-identical event sequence. This
+  is what makes the end-of-run scorecard a like-for-like comparison rather than
+  two unrelated runs.
+
+Arrivals stop at hour 48 so their consequences land inside the run.
+
+### 10.4 Feasibility guarantee
+
+An arrival is emitted only when the boxes already on yard of that size number
+fewer than `2 × (slots of that size)`. Because sizes never share a stack, and a
+top tier is only usable when its ground tier is filled, that condition is
+exactly the condition for at least one legal position to exist.
+
+**The operator can therefore never be dealt an unplaceable box.** Any rehandle
+they incur is a consequence of their own choice, never of the deal. This is
+asserted by test against both extreme strategies (always-open-ground, which
+exhausts slots fastest, and always-stack).
+
+### 10.5 The advice engine
+
+`chooseSlot()` is the predictive policy of §4(b) reduced to a single block.
+Block segregation by dwell bucket is meaningless with one block, so what remains
+is the LIFO rule that does the real work:
+
+1. **Prefer open ground** — a box on the ground can never be buried.
+2. Otherwise **stack only where the box beneath is forecast to leave later**,
+   choosing the greatest forecast margin so ordinary prediction error is least
+   likely to invert the pair.
+3. If neither exists, stack anyway and **say plainly that it will probably cost
+   a rehandle**.
+
+Each branch returns a one-sentence rationale written for a yard planner rather
+than a modeller. These surface in the UI's "What would Shipmate do?" hint and in
+the move-by-move replay. Case 3 matters for credibility: the tool states when it
+is out of good options instead of presenting a forced stack as a considered
+choice.
+
+### 10.6 Scorecard
+
+After the run, `replayWithPolicy()` executes the identical event sequence under
+the policy and the two results are compared side by side. The default demo seed
+`20260704` yields 25 events, on which a careless stack-first operator incurs **6
+rehandles (₹2,700)** against the policy's **1 (₹450)**.
+
+The policy scores 1 rather than 0 by design. It is beatable on a single block —
+a careful human can match or beat it — and the copy says so. The argument for
+automating the decision is 96 slots and ~800 boxes a month, which is what
+benchmark mode measures; overstating it at this scale would invite exactly the
+scepticism the interactive mode exists to defuse.
+
+### 10.7 Additional limitations
+
+Beyond those in §9, specific to interactive mode:
+
+1. **Compressed dwell** (§10.2) — the timings are pedagogical, not empirical.
+2. **Fixed arrival count** — real gate arrivals vary day to day; here N is fixed
+   at 13 so demo length is predictable.
+3. **Perfect pickup notice** — the operator learns of a pickup at the moment it
+   happens, with no advance call-forward. A real yard often has hours of notice,
+   which would make good placement easier than the exercise implies.

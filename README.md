@@ -46,18 +46,30 @@ Historical quoting intelligence by transport mode + commodity type:
 - Recharts-driven monthly revenue/cost/margin trends and mode breakdowns
 - Interactive SVG trade-lane map with great-circle-style arcs
 
-### 🏗️ Yard Digital Twin Simulator (CFS workspace → `Yard Twin` rail)
-A discrete-event simulation of container stacking in a CFS yard: 8 blocks × 12 ground slots × 2 tiers.
-Two yards run side by side on an identical, seeded arrival stream and differ only in stacking policy —
-**baseline** (nearest available position, stack whenever possible) versus **predictive** (dwell-bucket block
-segregation plus LIFO-consistent stacking driven by a noisy dwell forecast). Side-by-side top-down SVG yard
-views flash red on each rehandle; KPI panels and a cumulative-rehandle chart price the difference at
-4 reach-stacker minutes and ₹450 per rehandle.
+### 🏗️ Yard Digital Twin (CFS workspace → `Yard Twin` rail)
+A simulation of container stacking in a CFS yard, in two modes.
 
-The engine is pure TypeScript in `src/cfs/sim/`, fully separated from rendering and covered by 49 unit tests.
-Runs are deterministic given the seed shown in the UI. **The stacking algorithm, the rehandle accounting rule,
-parameter provenance, validation, and known limitations are specified in
-[`src/cfs/sim/README.md`](src/cfs/sim/README.md)** — written to be cited directly in academic work or an IP filing.
+**Operate the Yard (default)** — a turn-based exercise on a single block of 8 ground slots × 2 tiers.
+A seeded scenario deals ~25 interleaved arrivals and pickups over 3 sim-days, and **nothing moves until you
+act**: each arrival shows the container's size, type and predicted dwell, and you click where it goes. Hovering
+a stack position tells you when the box underneath is forecast to leave. Bury a box that gets called for early
+and you watch the rehandle animate and the cost meter tick up ₹450. A per-event **"What would Shipmate do?"**
+button gives the policy's slot choice plus a one-sentence rationale. At the end, a scorecard compares your
+rehandles and cost against the predictive policy replayed on the identical event sequence, with
+**Replay as Shipmate** stepping through its reasoning move by move.
+
+**Benchmark** — the full-scale auto-run: 8 blocks × 12 ground slots × 2 tiers, two yards on an identical
+seeded arrival stream differing only in stacking policy — **baseline** (nearest available position, stack
+whenever possible) versus **predictive** (dwell-bucket block segregation plus LIFO-consistent stacking driven
+by a noisy dwell forecast). Top-down SVG yard views flash red on each rehandle; KPI panels and a
+cumulative-rehandle chart price the difference at 4 reach-stacker minutes and ₹450 per rehandle.
+
+Both modes are driven by the same pure TypeScript engine in `src/cfs/sim/`, fully separated from rendering and
+covered by 91 unit tests. Scenario generation is seeded so the human operator and the policy face a
+byte-identical event sequence, and the generator guarantees you can never be dealt an unplaceable box.
+**The stacking algorithm, the rehandle accounting rule, parameter provenance, validation, and known limitations
+are specified in [`src/cfs/sim/README.md`](src/cfs/sim/README.md)** — written to be cited directly in academic
+work or an IP filing.
 
 ## Tech Stack
 
@@ -127,12 +139,16 @@ Vite serves the app on http://localhost:5173 and automatically proxies `/api/*` 
 │   │   ├── CfsApp.jsx          # Main controller and view engine for CFS workspace
 │   │   ├── computations.js     # Dynamic metrics, yard rent, aggregates, and data partitioning
 │   │   ├── constants.js        # CFS static tariff lists, synthetic containers, and schemas
-│   │   ├── YardSimulator.jsx   # Yard Digital Twin — rendering only, no model logic
+│   │   ├── YardSimulator.jsx   # Yard Twin shell — mode tabs only
+│   │   ├── InteractiveYard.jsx # "Operate the Yard" — turn-based, rendering only
+│   │   ├── BenchmarkYard.jsx   # "Benchmark" — 30-day auto-run, rendering only
 │   │   └── sim/                # Pure TypeScript simulation engine (no React, unit-tested)
 │   │       ├── engine.ts       # Yard model, stacking policies, rehandle accounting, KPIs
+│   │       ├── scenario.ts     # Seeded interactive scenarios, advice engine, policy replay
 │   │       ├── rng.ts          # Seeded mulberry32 + normal/log-normal/Poisson draws
 │   │       ├── types.ts        # Domain types
 │   │       ├── engine.test.ts  # 49 unit tests (`npm test`)
+│   │       ├── scenario.test.ts # 42 unit tests
 │   │       └── README.md       # Method write-up — citable in academic/IP filings
 │   ├── data/
 │   │   └── constants.js        # Full mock dataset + Claude schema prompt + color system
