@@ -9,6 +9,7 @@ import { buildPrintableHtml } from "../core/artifacts.js";
 import { useRegister } from "../core/register.js";
 import { useClaudeQuery } from "../core/query.js";
 import { LifecycleShell } from "../core/LifecycleShell.jsx";
+import YardSimulator from "./YardSimulator.jsx";
 
 const TERMINALS = [
   {
@@ -548,6 +549,7 @@ export default function CfsApp({ onSwitch }) {
           { id: "intelligence",  label: "Intelligence" },
           { id: "profitability", label: "Profitability" },
           { id: "ratecard",      label: "Rate Card" },
+          { id: "yardtwin",      label: "Yard Twin" },
           { id: "register",      label: `Register · ${register.length} artifact${register.length === 1 ? "" : "s"}` },
         ]}
         active={stage}
@@ -1424,6 +1426,9 @@ export default function CfsApp({ onSwitch }) {
             </>
           );
         })()}
+
+        {/* ── YARD TWIN rail — discrete-event stacking simulator ── */}
+        {stage === "yardtwin" && <YardSimulator />}
 
         {/* ── REGISTER rail ── */}
         {stage === "register" && (() => {

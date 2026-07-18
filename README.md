@@ -46,6 +46,19 @@ Historical quoting intelligence by transport mode + commodity type:
 - Recharts-driven monthly revenue/cost/margin trends and mode breakdowns
 - Interactive SVG trade-lane map with great-circle-style arcs
 
+### 🏗️ Yard Digital Twin Simulator (CFS workspace → `Yard Twin` rail)
+A discrete-event simulation of container stacking in a CFS yard: 8 blocks × 12 ground slots × 2 tiers.
+Two yards run side by side on an identical, seeded arrival stream and differ only in stacking policy —
+**baseline** (nearest available position, stack whenever possible) versus **predictive** (dwell-bucket block
+segregation plus LIFO-consistent stacking driven by a noisy dwell forecast). Side-by-side top-down SVG yard
+views flash red on each rehandle; KPI panels and a cumulative-rehandle chart price the difference at
+4 reach-stacker minutes and ₹450 per rehandle.
+
+The engine is pure TypeScript in `src/cfs/sim/`, fully separated from rendering and covered by 49 unit tests.
+Runs are deterministic given the seed shown in the UI. **The stacking algorithm, the rehandle accounting rule,
+parameter provenance, validation, and known limitations are specified in
+[`src/cfs/sim/README.md`](src/cfs/sim/README.md)** — written to be cited directly in academic work or an IP filing.
+
 ## Tech Stack
 
 | Layer       | Technology                                      |
@@ -113,7 +126,14 @@ Vite serves the app on http://localhost:5173 and automatically proxies `/api/*` 
 │   ├── cfs/                    # Sattva CFS Intelligence Module
 │   │   ├── CfsApp.jsx          # Main controller and view engine for CFS workspace
 │   │   ├── computations.js     # Dynamic metrics, yard rent, aggregates, and data partitioning
-│   │   └── constants.js        # CFS static tariff lists, synthetic containers, and schemas
+│   │   ├── constants.js        # CFS static tariff lists, synthetic containers, and schemas
+│   │   ├── YardSimulator.jsx   # Yard Digital Twin — rendering only, no model logic
+│   │   └── sim/                # Pure TypeScript simulation engine (no React, unit-tested)
+│   │       ├── engine.ts       # Yard model, stacking policies, rehandle accounting, KPIs
+│   │       ├── rng.ts          # Seeded mulberry32 + normal/log-normal/Poisson draws
+│   │       ├── types.ts        # Domain types
+│   │       ├── engine.test.ts  # 49 unit tests (`npm test`)
+│   │       └── README.md       # Method write-up — citable in academic/IP filings
 │   ├── data/
 │   │   └── constants.js        # Full mock dataset + Claude schema prompt + color system
 │   ├── utils/
@@ -157,6 +177,8 @@ All amounts in INR. HS chapters and drawback rates are simplified but realistic.
 | `npm run dev`   | Start Vite dev server (with HMR)         |
 | `npm run build` | Build production bundle to `dist/`       |
 | `npm run lint`  | Run ESLint                               |
+| `npm test`      | Run the simulation-engine unit tests     |
+| `npm run typecheck` | Type-check the TypeScript sim engine |
 | `npm run preview`| Preview production build locally        |
 | `node server.js`| Start the required AI proxy backend      |
 
