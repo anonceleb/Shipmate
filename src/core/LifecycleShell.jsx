@@ -130,28 +130,54 @@ export function LifecycleShell({ brand, stages, rails, active, onSelect, onGapCl
           </div>
 
           {/* ── rails tier ── */}
-          <div style={{ display: "flex", gap: 22, padding: "10px 0 0", alignItems: "center" }}>
-            {rails.map(r => (
-              <button
-                key={r.id}
-                onClick={() => onSelect(r.id)}
-                style={{
-                  padding: "8px 2px 10px",
-                  border: "none",
-                  background: "transparent",
-                  color: active === r.id ? C.accent : C.muted,
-                  fontSize: 12,
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.7px",
-                  borderBottom: active === r.id ? `2px solid ${C.accent}` : "2px solid transparent",
-                }}
-              >
-                {r.label}
-              </button>
-            ))}
-            <div style={{ marginLeft: "auto", fontSize: 10, color: C.muted, ...mono, whiteSpace: "nowrap" }}>← → keys move through the journey</div>
+          <div style={{
+            display: "flex", gap: 6, padding: "10px 0 12px", marginTop: 2,
+            alignItems: "center", borderTop: `1px solid ${C.border}`,
+          }}>
+            <span style={{
+              fontSize: 9, color: C.muted, textTransform: "uppercase",
+              letterSpacing: "1.2px", marginRight: 10, whiteSpace: "nowrap",
+              ...mono, paddingTop: 1,
+            }}>Analytics</span>
+            <div style={{ width: 1, height: 14, background: C.border, marginRight: 6, flexShrink: 0 }} />
+            {rails.map(r => {
+              const isRailActive = active === r.id;
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => onSelect(r.id)}
+                  onMouseEnter={e => {
+                    if (!isRailActive) {
+                      e.currentTarget.style.borderColor = C.accent;
+                      e.currentTarget.style.color = C.accent;
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    if (!isRailActive) {
+                      e.currentTarget.style.borderColor = C.border;
+                      e.currentTarget.style.color = C.muted;
+                    }
+                  }}
+                  style={{
+                    padding: "5px 14px",
+                    borderRadius: 20,
+                    border: `1px solid ${isRailActive ? C.accent : C.border}`,
+                    background: isRailActive ? C.accentDim : "transparent",
+                    color: isRailActive ? C.accent : C.muted,
+                    fontSize: 11,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.7px",
+                    fontWeight: isRailActive ? 600 : 400,
+                    transition: "border-color 0.15s, color 0.15s",
+                  }}
+                >
+                  {r.label}
+                </button>
+              );
+            })}
+            <div style={{ marginLeft: "auto", fontSize: 10, color: C.border, ...mono, whiteSpace: "nowrap" }}>← → keys</div>
           </div>
         </div>
       </div>
