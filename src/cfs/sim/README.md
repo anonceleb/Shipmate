@@ -8,23 +8,24 @@ This document specifies the model precisely enough to be cited in academic work
 or an IP filing, and to be reproduced independently from this description alone.
 
 **Implementation:** `engine.ts` (model), `rng.ts` (stochastics), `types.ts`
-(domain types), `scenario.ts` (interactive scenario generation), and
-`engine.test.ts` + `scenario.test.ts` + `docs.test.ts` (108 unit tests). The engine is pure
-TypeScript with no rendering dependency; `../InteractiveYard.jsx` and
-`../BenchmarkYard.jsx` are presentation layers over it and contain no model
-logic.
+(domain types), `scenario.ts` (interactive scenario generation + cost preview),
+and `engine.test.ts` + `scenario.test.ts` + `docs.test.ts` (111 unit tests). The
+engine is pure TypeScript with no rendering dependency; `../InteractiveYard.jsx`,
+`../BenchmarkYard.jsx`, and `../YardSimulator.jsx` are presentation layers over
+it and contain no model logic.
 
-The module supports two modes, both driven by this engine:
+The module supports three modes, all driven by this engine:
 
-| | **Operate the Yard** (`scenario.ts`) | **Benchmark** (`engine.ts`) |
-|---|---|---|
-| Purpose | Teaching / demo — a person plays | Statistical proof of the claim |
-| Yard | 1 block, 8 slots × 2 tiers | 8 blocks, 96 slots × 2 tiers |
-| Horizon | 3 days, ~25 discrete events | 30 days, 720 hourly steps |
-| Advance | Turn-based; nothing moves until the operator acts | Auto-run at 1× / 5× / 20× |
-| Dwell | Compressed (§10.2) | Full-scale (§3.2) |
+| | **Operate the Yard** (`scenario.ts`) | **Benchmark** (`engine.ts`) | **Tournament** (`engine.ts`) |
+|---|---|---|---|
+| Purpose | Teaching / demo — a person plays | Statistical proof of the claim | Objection-killer — many seeds |
+| Yard | 1 block, 8 slots × 2 tiers | 8 blocks, 96 slots × 2 tiers | 8 blocks, 96 slots × 2 tiers |
+| Horizon | 3 days, ~25 discrete events | 30 days, 720 hourly steps | 30 days × 50 seeds |
+| Advance | Turn-based; nothing moves until the operator acts | Auto-run at 1× / 5× / 20× | Batch — all 50 seeds run in ~100ms |
+| Dwell | Compressed (§10.2) | Full-scale (§3.2) | Full-scale (§3.2) |
 
 §§1–9 below describe benchmark mode. §10 describes the interactive scenario.
+§10.9 describes the tournament.
 
 ---
 
@@ -449,6 +450,85 @@ Beyond those in §9, specific to interactive mode:
 3. **Perfect pickup notice** — the operator learns of a pickup at the moment it
    happens, with no advance call-forward. A real yard often has hours of notice,
    which would make good placement easier than the exercise implies.
+
+### 10.8 Interactive UI features
+
+The interactive mode includes several features inspired by industry TOS software
+(Navis N4, Octopi) that enhance teaching and demo effectiveness:
+
+#### Live cost preview
+
+`costPreview()` in `scenario.ts` evaluates the financial risk of placing a
+container at any legal position. It runs in O(1) — reading only the target
+slot — and returns a risk level and projected cost:
+
+| Placement | Risk | Projected cost |
+|---|---|---|
+| Ground | `safe` | ₹0 |
+| Stack, LIFO margin > 12h | `safe` | ₹0 |
+| Stack, LIFO margin ≤ 12h | `risky` | ~₹135 (30% of rehandle cost) |
+| Stack, LIFO violated | `danger` | ₹450 (full rehandle cost) |
+
+The UI renders this as colour-coded slot borders (green/amber/red) with ₹ cost
+badges, and the drag ghost carries a live label that updates per slot.
+
+#### Yard density heat map
+
+A toggle overlays LIFO safety colours on all stacked container pairs. Available
+in both Operate and Benchmark modes. Colours encode the predicted departure
+margin between the ground and top container: green (> 12h safe), amber (≤ 12h),
+red (LIFO violated).
+
+#### Gate queue
+
+A visual strip above the yard showing the next 3 upcoming events (arrivals and
+pickups) as colour-coded chips. Makes arrivals feel like physical events rather
+than card updates, and gives the presenter something to gesture at.
+
+#### Container search
+
+A text input that highlights matching containers in the yard SVG with a pulsing
+gold border. Supports partial ID matching. Useful for the presenter to say
+"Where is the box you buried in step 3?" and visually locate it.
+
+#### Yard utilisation gauge
+
+An SVG donut chart showing ground-slot occupancy percentage with colour coding
+(green < 60%, amber 60–85%, red > 85%) and a TEU count. Shows *why* the
+operator stacks — utilisation is climbing — and that Shipmate achieves the same
+throughput at lower pressure.
+
+#### Running cost sparkline
+
+An inline SVG chart tracking cumulative rehandle cost over the course of play.
+The user's cost is a solid line; Shipmate's is dashed for comparison. The point
+where the lines diverge is the moment the money was lost.
+
+#### Rehandle blame trail
+
+When a dispatch triggers a rehandle, the move log entry that *placed* the
+blocking container is highlighted red with a "← caused rehandle" badge for 4
+seconds. Arrival entries carry risk badges (⚠ rehandle risk, ⚠ tight margin)
+matching the cost preview at the time of placement.
+
+### 10.9 Tournament mode
+
+The third tab runs 50 independent 30-day simulations via `runToCompletion()`
+with deterministic, spread-out seeds (base 1,000,000, stride 7,919). This
+addresses the "did you cherry-pick the scenario?" objection by showing the
+distribution of rehandle savings across many seeds.
+
+The UI shows:
+
+- **Summary stats** — win/tie/loss count, average rehandles saved, range, total
+  ₹ avoided
+- **Histogram** — savings % distribution bucketed in 10-point bands
+- **Per-seed table** — scrollable breakdown with seed, baseline rehandles,
+  predictive rehandles, saved count, percentage, and ₹ saved
+
+All 50 runs use the same config as the benchmark defaults (λ = 1.2, 35% 40ft,
+80% accuracy, 30 days). The entire batch completes in ~100ms on a modern
+laptop.
 
 ---
 

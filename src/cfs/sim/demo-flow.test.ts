@@ -143,6 +143,12 @@ function render(): string {
   L.push('holding for a couple of seconds, or press **"Continue →"** to move on immediately. None of');
   L.push("that stops you from placing it badly anyway, which is the point.");
   L.push("");
+  L.push("The **gate queue** above the yard shows the next 3 events (arrivals and pickups),");
+  L.push("the **yard utilisation gauge** shows how full the yard is (and why you feel");
+  L.push("compelled to stack), and the **cost sparkline** builds a running comparison");
+  L.push("between your cost and Shipmate's. Toggle the **heat map** at any time to see");
+  L.push("which stacked pairs are safe (green), tight (amber), or LIFO-violated (red).");
+  L.push("");
   L.push(`- **Step ${firstMistake.step}** is the fateful placement — the slot's own badge is already red.`);
   L.push(`- **Step ${firstBill.step}** is where the bill arrives — the meter moves for the first time.`);
   L.push(`- By the end you are at **${rehandles} rehandles, ${inr(cost)}**.`);
@@ -178,11 +184,13 @@ function render(): string {
   L.push(`Place it: ${firstMistake.click}. ${firstMistake.note}`);
   L.push("");
   L.push("> Hover or drag toward that slot first and pause on it — its badge is already showing red");
-  L.push('> (~₹450), and pressing **"What would Shipmate do?"** says the same thing in words. Place it');
+  L.push('> (~₹450), and pressing **"What would Shipmate do?"** says the same thing in words. If the');
+  L.push("> heat map is on, the slot pair will glow red the instant the stack forms. Place it");
   L.push("> there anyway. The **Cost incurred** meter at the top still reads ₹0, because nothing is");
   L.push("> actually charged until the box is dug up — the gap between the warning and the bill is");
-  L.push("> the whole lesson. The verdict panel that appears will say Shipmate disagreed; press");
-  L.push('> **"Continue →"** rather than waiting it out.');
+  L.push("> the whole lesson. Check the **gate queue** — SMCU000001's pickup is only a few events");
+  L.push("> away, building tension. The verdict panel that appears will say Shipmate disagreed;");
+  L.push('> press **"Continue →"** rather than waiting it out.');
   L.push("");
 
   for (const [i, m] of money.entries()) {
@@ -193,11 +201,15 @@ function render(): string {
     L.push(`Click **Dispatch →**. ${m.note}`);
     L.push("");
     if (i === 0) {
-      L.push("> The slot flashes red and the meter moves for the first time. Scroll to **Your moves**");
+      L.push("> The slot flashes red and the meter moves for the first time. The **cost sparkline**");
+      L.push("> shows your line diverging from Shipmate's. Scroll to **Your moves**");
       L.push(`> below — the row for step ${m.causeStep}, where you placed the stack, flashes red for a`);
       L.push('> few seconds tagged "← caused rehandle", drawing a direct line from that decision to');
       L.push("> this bill. Say the line while it's flashing:");
       L.push(`> *\"That ${inr(RUPEES_PER_REHANDLE)} was decided ${m.step - m.causeStep!} steps ago, and there was no way to feel it at the time.\"*`);
+      L.push(">");
+      L.push('> Optionally type **"000001"** into the search box — the departed container is gone,');
+      L.push("> but the blocking box that caused the rehandle is still on yard, pulsing gold.");
       L.push("");
     }
   }
@@ -227,7 +239,19 @@ function render(): string {
   L.push("");
   L.push("Switch to the **Benchmark** tab, press **Play** at **20×**, and let the 30-day run finish");
   L.push("in about four seconds. Same rule, full-scale yard, and the gap between the two lines is");
-  L.push("the actual business case.");
+  L.push("the actual business case. Toggle **Heat map** in the legend bar to see which stacks are");
+  L.push("LIFO-safe across the 96-slot yard.");
+  L.push("");
+  L.push("### Handing over to Tournament");
+  L.push("");
+  L.push("Switch to the **Tournament** tab and click **▶ Run 50 scenarios**. In under a second, the");
+  L.push("histogram fills in — 50 independent 30-day runs, all different seeds, same config.");
+  L.push("");
+  L.push('The point to make: *"We didn\'t pick a friendly seed. Here are 50 random ones. The');
+  L.push('histogram is overwhelmingly to the right of zero — this is a structural advantage, not');
+  L.push('luck."*');
+  L.push("");
+  L.push("The per-seed table below the histogram lets anyone drill into a specific run.");
   L.push("");
   L.push("---");
   L.push("");
@@ -236,18 +260,23 @@ function render(): string {
   L.push("**\"Is this real data?\"** No — it is a seeded simulation, and the seed is on screen. Type a");
   L.push("different one and it deals a different yard. Nothing here is a recording.");
   L.push("");
-  L.push("**\"Did you pick a scenario that makes you look good?\"** The seed is visible and editable;");
-  L.push("press **New scenario** and play a random one live. The placement rule is in");
-  L.push("`src/cfs/sim/README.md` §10.5 and the dwell parameters are listed as measured or");
-  L.push("placeholder in §11.");
+  L.push('**"Did you pick a scenario that makes you look good?"** The seed is visible and editable;');
+  L.push("press **New scenario** and play a random one live. Or switch to the **Tournament** tab and");
+  L.push("run 50 seeds at once — the histogram answers this question in three seconds. The placement");
+  L.push("rule is in `src/cfs/sim/README.md` §10.5 and the dwell parameters are listed as measured");
+  L.push("or placeholder in §11.");
   L.push("");
-  L.push("**\"What if the dwell prediction is wrong?\"** Benchmark tab, drag **Prediction accuracy**");
+  L.push('**"What if the dwell prediction is wrong?"** Benchmark tab, drag **Prediction accuracy**');
   L.push("down to 50% and re-run. The advantage narrows but does not vanish — §7, finding 2.");
   L.push("");
-  L.push("**\"What happens when the yard is full?\"** The advantage compresses to almost nothing above");
+  L.push('**"What happens when the yard is full?"** The advantage compresses to almost nothing above');
   L.push("~90% ground utilisation, because there is no spare ground to exploit. Raise the arrival");
   L.push("rate on Benchmark and show it. Better to volunteer this than be caught by it — §7,");
   L.push("finding 3.");
+  L.push("");
+  L.push('**"What do the colours on the boxes mean?"** Toggle **Heat map** — green pairs are');
+  L.push("LIFO-safe, amber are tight, red are LIFO-violated and heading for a rehandle. The same");
+  L.push("colour logic drives the cost badges during placement.");
   L.push("");
   return L.join("\n");
 }

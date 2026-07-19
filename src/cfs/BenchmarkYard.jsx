@@ -57,7 +57,7 @@ function slotOrigin(slot) {
  * corner badge marks a 2-high stack, and a slot flashes red on the hour it takes
  * a rehandle. Purely presentational — every number comes from the engine.
  */
-function YardPlan({ yard, segregated }) {
+function YardPlan({ yard, segregated, showHeatMap }) {
   const flashed = useMemo(() => new Set(yard.flashes), [yard.flashes]);
   return (
     <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} width="100%" style={{ display: "block" }}>
@@ -91,11 +91,20 @@ function YardPlan({ yard, segregated }) {
         const stacked = !!slot.stack[1];
         const isFlash = flashed.has(slot.index);
         const colour = ground ? BUCKET_COLOR[ground.bucket] : C.border;
+
+        // Heat map: override fill for stacked pairs based on LIFO safety
+        let heatFill = null;
+        if (showHeatMap && ground && stacked) {
+          const top = slot.stack[1];
+          const margin = ground.predictedDepartureHour - top.predictedDepartureHour;
+          heatFill = margin > 12 ? "#2ECC7155" : margin > 0 ? "#E8A83855" : "#E74C3C66";
+        }
+
         return (
           <g key={slot.index}>
             <rect
               x={x} y={y} width={CELL_W} height={CELL_H} rx={3}
-              fill={isFlash ? FLASH + "AA" : ground ? colour + "33" : "transparent"}
+              fill={isFlash ? FLASH + "AA" : heatFill || (ground ? colour + "33" : "transparent")}
               stroke={isFlash ? FLASH : ground ? colour : C.border}
               strokeWidth={isFlash ? 2 : ground ? 1 : 0.7}
               strokeDasharray={ground ? undefined : "2 2"}
@@ -131,7 +140,7 @@ function Kpi({ label, value, sub, tone }) {
   );
 }
 
-function YardPanel({ title, tag, yard, accent, segregated }) {
+function YardPanel({ title, tag, yard, accent, segregated, showHeatMap }) {
   const k = kpis(yard);
   return (
     <div style={{ ...card, marginBottom: 0, flex: 1, minWidth: 430 }}>
@@ -146,7 +155,7 @@ function YardPanel({ title, tag, yard, accent, segregated }) {
       </div>
 
       <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, marginBottom: 14 }}>
-        <YardPlan yard={yard} segregated={segregated} />
+        <YardPlan yard={yard} segregated={segregated} showHeatMap={showHeatMap} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
@@ -191,6 +200,7 @@ export default function BenchmarkYard() {
   const [sim, setSim] = useState(() => createSimulation(DEFAULTS));
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(5);
+  const [showHeatMap, setShowHeatMap] = useState(false);
 
   // Any parameter change rebuilds the run from hour zero — a run is only
   // meaningful against a fixed config, and this keeps the seed honest.
@@ -336,9 +346,9 @@ export default function BenchmarkYard() {
       {/* ── twin yards ── */}
       <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 20 }}>
         <YardPanel title="Yard A — Baseline" tag="NEAREST-SLOT STACKING"
-          yard={sim.yards.baseline} accent={C.muted} segregated={false} />
+          yard={sim.yards.baseline} accent={C.muted} segregated={false} showHeatMap={showHeatMap} />
         <YardPanel title="Yard B — Predictive" tag="DWELL-AWARE STACKING"
-          yard={sim.yards.predictive} accent={C.accent} segregated />
+          yard={sim.yards.predictive} accent={C.accent} segregated showHeatMap={showHeatMap} />
       </div>
 
       {/* ── legend ── */}
@@ -361,6 +371,28 @@ export default function BenchmarkYard() {
           Rehandle this hour
         </span>
         <span style={{ fontSize: 12, color: C.muted }}>Cell text = slot size (20ft / 40ft designated)</span>
+        <button onClick={() => setShowHeatMap(h => !h)} style={{
+          padding: "5px 12px", borderRadius: 7, fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          border: `1px solid ${showHeatMap ? C.accent : C.border}`,
+          background: showHeatMap ? C.accentDim : "transparent",
+          color: showHeatMap ? C.accent : C.muted,
+          transition: "all 150ms ease",
+        }}>
+          {showHeatMap ? "◆ Heat map ON" : "◇ Heat map"}
+        </button>
+        {showHeatMap && (
+          <>
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.muted }}>
+              <span style={{ width: 11, height: 11, borderRadius: 3, background: "#2ECC7155" }} /> LIFO safe
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.muted }}>
+              <span style={{ width: 11, height: 11, borderRadius: 3, background: "#E8A83855" }} /> tight
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.muted }}>
+              <span style={{ width: 11, height: 11, borderRadius: 3, background: "#E74C3C66" }} /> violated
+            </span>
+          </>
+        )}
       </div>
 
       {/* ── the delta ── */}

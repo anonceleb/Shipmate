@@ -48,18 +48,28 @@ const SVG_H = PAD_TOP + 2 * (CELL_H + 6) + GROUND_H + 20;
 const cellX = i => PAD_X + i * (CELL_W + GAP);
 const cellY = tier => PAD_TOP + (tier === 1 ? 0 : CELL_H + 6);
 
-function ContainerBox({ x, y, container, flash, dim, ghost }) {
+function ContainerBox({ x, y, container, flash, dim, ghost, heatMap, searchHit }) {
   const colour = container ? BUCKET_COLOR[container.bucket] : C.border;
+  // Heat-map overlay: greenish if LIFO-safe, reddish if LIFO-violated
+  let heatFill = null;
+  if (heatMap && container) {
+    heatFill = heatMap === "safe" ? "#2ECC7144" : heatMap === "risky" ? "#E8A83844" : heatMap === "danger" ? "#E74C3C55" : null;
+  }
   return (
     <g style={{ transition: `opacity ${ANIM_MS}ms ease, transform ${ANIM_MS}ms ease` }}
       opacity={ghost ? 0.35 : dim ? 0.45 : 1}>
       <rect
         x={x} y={y} width={CELL_W} height={CELL_H} rx={7}
-        fill={flash ? FLASH + "CC" : colour + "2E"}
-        stroke={flash ? FLASH : colour}
-        strokeWidth={flash ? 3 : 1.5}
+        fill={flash ? FLASH + "CC" : heatFill || colour + "2E"}
+        stroke={searchHit ? "#FFD700" : flash ? FLASH : colour}
+        strokeWidth={searchHit ? 3.5 : flash ? 3 : 1.5}
         style={{ transition: `fill ${ANIM_MS}ms ease, stroke ${ANIM_MS}ms ease` }}
       />
+      {searchHit && (
+        <rect x={x} y={y} width={CELL_W} height={CELL_H} rx={7}
+          fill="none" stroke="#FFD700" strokeWidth={3.5}
+          style={{ animation: "searchPulse 1.2s ease-in-out infinite" }} />
+      )}
       <text x={x + CELL_W / 2} y={y + 26} fontSize={13} textAnchor="middle"
         fill={flash ? "#fff" : colour} fontWeight="700" {...mono}>
         {container.size}FT
@@ -76,7 +86,18 @@ function ContainerBox({ x, y, container, flash, dim, ghost }) {
   );
 }
 
-function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pickingSlot, interactive, costPreviews }) {
+/** Inline keyframes for search pulse animation (injected once). */
+const PULSE_STYLE = `@keyframes searchPulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }`;
+let _pulseInjected = false;
+function ensurePulseStyle() {
+  if (_pulseInjected) return;
+  const s = document.createElement("style");
+  s.textContent = PULSE_STYLE;
+  document.head.appendChild(s);
+  _pulseInjected = true;
+}
+
+function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pickingSlot, interactive, costPreviews, showHeatMap, searchId }) {
   const legalKey = useMemo(
     () => new Set((legal || []).map(p => `${p.slotIndex}:${p.tier}`)),
     [legal]
@@ -110,9 +131,22 @@ function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pi
               const cp = costPreviews && costPreviews[key];
 
               if (container) {
+                // Heat map: for stacked containers, check LIFO safety of the pair
+                let hm = null;
+                if (showHeatMap && tier === 0 && slot.stack[1]) {
+                  const top = slot.stack[1];
+                  const margin = container.predictedDepartureHour - top.predictedDepartureHour;
+                  hm = margin > 12 ? "safe" : margin > 0 ? "risky" : "danger";
+                } else if (showHeatMap && tier === 1 && slot.stack[0]) {
+                  const below = slot.stack[0];
+                  const margin = below.predictedDepartureHour - container.predictedDepartureHour;
+                  hm = margin > 12 ? "safe" : margin > 0 ? "risky" : "danger";
+                }
+                const isSearchHit = searchId && container.id.toLowerCase().includes(searchId.toLowerCase());
                 return (
                   <ContainerBox key={tier} x={x} y={y} container={container}
-                    flash={isFlash && tier === 0} dim={isPicking && !isFlash} />
+                    flash={isFlash && tier === 0} dim={isPicking && !isFlash}
+                    heatMap={hm} searchHit={isSearchHit} />
                 );
               }
 
@@ -239,6 +273,10 @@ export default function InteractiveYard() {
   const [costHistory, setCostHistory] = useState([{ step: 0, you: 0, shipmate: 0 }]);
   // Index of the log entry currently highlighted by the blame trail.
   const [blameIdx, setBlameIdx] = useState(null);
+  // Heat map toggle.
+  const [showHeatMap, setShowHeatMap] = useState(false);
+  // Container search.
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Replay mode ("Replay as Shipmate"). The replay drives the same `yard` state,
   // so the operator's finished yard is snapshotted before it is overwritten.
@@ -271,6 +309,7 @@ export default function InteractiveYard() {
     setReplayIdx(null);
     setCostHistory([{ step: 0, you: 0, shipmate: 0 }]);
     setBlameIdx(null);
+    setSearchQuery("");
     savedYard.current = null;
   }, [seed]);
 
@@ -498,6 +537,17 @@ export default function InteractiveYard() {
 
   const interactive = !busy && !replaying && !finished && !(drag && drag.active);
 
+  // Yard utilisation gauge — ground slots occupied / total ground slots
+  const groundOccupied = yard.slots.filter(s => s.stack[0]).length;
+  const totalTeu = yard.slots.reduce((t, s) => t + (s.stack[0] ? 1 : 0) + (s.stack[1] ? 1 : 0), 0);
+  const groundUtilPct = Math.round((groundOccupied / SCENARIO_SLOTS) * 100);
+
+  // Upcoming events for gate queue (next 3 events after cursor)
+  const upcomingEvents = scenario.events.slice(cursor, cursor + 3);
+
+  // Inject search pulse animation
+  useEffect(() => { ensurePulseStyle(); }, []);
+
   return (
     <>
       {drag && drag.active && event && event.kind === "arrival" && (
@@ -719,6 +769,88 @@ export default function InteractiveYard() {
         </div>
       )}
 
+      {/* ── gate queue + controls ── */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        {/* Gate queue — upcoming events */}
+        <div style={{ flex: 1, minWidth: 300 }}>
+          <div style={{ ...sectionTitle, marginBottom: 6, fontSize: 10 }}>Gate queue</div>
+          <div style={{ display: "flex", gap: 8, minHeight: 42, alignItems: "center" }}>
+            {upcomingEvents.length === 0 ? (
+              <span style={{ fontSize: 11, color: C.muted, ...mono }}>— empty —</span>
+            ) : upcomingEvents.map((ev, i) => {
+              const isArrival = ev.kind === "arrival";
+              const colour = isArrival ? BUCKET_COLOR[ev.container.bucket] : C.yellow;
+              const label = isArrival ? ev.container.id : ev.containerId;
+              return (
+                <div key={i} style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                  padding: "6px 10px", borderRadius: 7, minWidth: 70,
+                  background: colour + "18", border: `1px solid ${colour}`,
+                  opacity: i === 0 ? 1 : 0.5 + (0.2 * (3 - i)),
+                  transform: `translateX(${i * 2}px)`,
+                  transition: "all 300ms ease",
+                }}>
+                  <span style={{ fontSize: 9, color: colour, textTransform: "uppercase", fontWeight: 700, ...mono }}>
+                    {isArrival ? "IN" : "OUT"}
+                  </span>
+                  <span style={{ fontSize: 10, color: C.text, ...mono }}>{label}</span>
+                  {isArrival && (
+                    <span style={{ fontSize: 8.5, color: C.muted, ...mono }}>
+                      {ev.container.size}ft · ~{Math.round(ev.container.predictedDwellHours)}h
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            {upcomingEvents.length > 0 && (
+              <span style={{ fontSize: 10, color: C.muted, ...mono }}>→</span>
+            )}
+          </div>
+        </div>
+
+        {/* Utilisation gauge */}
+        <div style={{ textAlign: "center", minWidth: 80 }}>
+          <div style={{ ...sectionTitle, marginBottom: 4, fontSize: 10 }}>Yard use</div>
+          <svg viewBox="0 0 60 60" width={56} height={56}>
+            <circle cx={30} cy={30} r={24} fill="none" stroke={C.border} strokeWidth={5} />
+            <circle cx={30} cy={30} r={24} fill="none"
+              stroke={groundUtilPct > 85 ? C.red : groundUtilPct > 60 ? C.yellow : C.green}
+              strokeWidth={5}
+              strokeDasharray={`${groundUtilPct * 1.508} 200`}
+              strokeLinecap="round"
+              transform="rotate(-90 30 30)"
+              style={{ transition: "stroke-dasharray 400ms ease, stroke 400ms ease" }}
+            />
+            <text x={30} y={34} fontSize={14} textAnchor="middle" fill={C.text} fontWeight="700" {...mono}>
+              {groundUtilPct}%
+            </text>
+          </svg>
+          <div style={{ fontSize: 9, color: C.muted, marginTop: 2 }}>{totalTeu} TEU on yard</div>
+        </div>
+
+        {/* Controls: heat map toggle + search */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 160 }}>
+          <button onClick={() => setShowHeatMap(h => !h)} style={{
+            padding: "6px 12px", borderRadius: 7, fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+            border: `1px solid ${showHeatMap ? C.accent : C.border}`,
+            background: showHeatMap ? C.accentDim : "transparent",
+            color: showHeatMap ? C.accent : C.muted,
+            transition: "all 150ms ease",
+          }}>
+            {showHeatMap ? "◆ Heat map ON" : "◇ Heat map"}
+          </button>
+          <input
+            type="text" placeholder="Search box ID…"
+            value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            style={{
+              padding: "6px 10px", borderRadius: 7, border: `1px solid ${C.border}`,
+              background: C.bg, color: C.text, fontSize: 11, ...mono,
+              outline: "none",
+            }}
+          />
+        </div>
+      </div>
+
       {/* ── the yard ── */}
       <div style={{ ...card, padding: 16 }}>
         <div style={{ overflowX: "auto" }}>
@@ -733,6 +865,8 @@ export default function InteractiveYard() {
               pickingSlot={pickingSlot}
               interactive={interactive}
               costPreviews={costPreviews}
+              showHeatMap={showHeatMap}
+              searchId={searchQuery}
             />
           </div>
         </div>
@@ -743,6 +877,19 @@ export default function InteractiveYard() {
               {BUCKET_LABEL[b]}
             </span>
           ))}
+          {showHeatMap && (
+            <>
+              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.muted }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: "#2ECC7144" }} /> LIFO safe
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.muted }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: "#E8A83844" }} /> tight margin
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.muted }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: "#E74C3C55" }} /> LIFO violated
+              </span>
+            </>
+          )}
           <span style={{ fontSize: 11.5, color: C.muted }}>Top tier sits above the ground tier — a box on top must come off first.</span>
         </div>
       </div>
