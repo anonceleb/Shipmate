@@ -1,0 +1,46 @@
+name: CI
+
+# Runs on every pull request, which "Deploy to GitHub Pages" does not — it only
+# fires on push to main. That gap is how a lock file that failed `npm ci` on
+# Linux reached main with a green PR (#5 -> #6): nothing on the PR path ever
+# executed an install on a Linux runner.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A PR superseded by a new push does not need its old run finished.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` — not `npm install` — because the point is to prove the lock
+      # file and package.json are in sync on Linux before anything merges.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        env:
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+        run: npm run build

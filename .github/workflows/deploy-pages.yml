@@ -27,6 +27,14 @@ jobs:
 
       - run: npm ci
 
+      # Gate the deploy on the sim engine's tests. Without this the 108 engine
+      # tests gate nothing and a regression in the stacking logic ships green.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
       - name: Build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
