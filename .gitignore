@@ -24,6 +24,9 @@ dist-ssr
 *.sw?
 .env
 
+# Decks, briefs, research — kept locally, not in the repo
+Documents/
+
 # Secrets & recovery codes — never commit these
 *recovery-codes*
 *.pem
