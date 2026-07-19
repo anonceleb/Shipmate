@@ -136,18 +136,28 @@ function render(): string {
   L.push("ground space feels like the scarce resource. That instinct is the whole problem, and the");
   L.push("demo makes it cost real money in front of the customer.");
   L.push("");
-  L.push(`- **Step ${firstMistake.step}** is the fateful click. Nothing appears to go wrong.`);
+  L.push("Every arrival is a physical container in a staging chip: drag it onto a highlighted slot,");
+  L.push("or just tap the slot directly — both place it identically. Every legal slot carries a live");
+  L.push("cost badge (green ₹0, amber ~₹135, red ₹450) before you commit to it, and the instant you");
+  L.push("place a box, the same card tells you whether that matched what Shipmate would have done —");
+  L.push('holding for a couple of seconds, or press **"Continue →"** to move on immediately. None of');
+  L.push("that stops you from placing it badly anyway, which is the point.");
+  L.push("");
+  L.push(`- **Step ${firstMistake.step}** is the fateful placement — the slot's own badge is already red.`);
   L.push(`- **Step ${firstBill.step}** is where the bill arrives — the meter moves for the first time.`);
   L.push(`- By the end you are at **${rehandles} rehandles, ${inr(cost)}**.`);
   L.push(`- Shipmate, on the identical sequence, finishes at **${ai.rehandles} (${inr(ai.costRupees)})**.`);
   L.push("");
-  L.push(`Total: **${sc.events.length} clicks**, about two to three minutes.`);
+  L.push(`Total: **${sc.events.length} moves**, about two to three minutes.`);
   L.push("");
   L.push("---");
   L.push("");
-  L.push("## Full click-by-click");
+  L.push("## Full move-by-move");
   L.push("");
-  L.push("| # | Time | What appears | Click | Cost after |");
+  L.push("Drag onto the named slot, or tap it — either places the box. Pickups are always");
+  L.push("**Dispatch →**.");
+  L.push("");
+  L.push("| # | Time | What appears | Place | Cost after |");
   L.push("|---|---|---|---|---|");
   for (const r of rows) {
     const flag = r.rehandle ? " 🔴" : "";
@@ -158,19 +168,21 @@ function render(): string {
   L.push("");
   L.push("## The moments to actually narrate");
   L.push("");
-  L.push("Everything else is just clicking. These are the beats.");
+  L.push("Everything else is just placing boxes. These are the beats.");
   L.push("");
 
   L.push(`### Step ${firstMistake.step} — the mistake nobody notices`);
   L.push("");
   L.push(`${firstMistake.what}`);
   L.push("");
-  L.push(`Click ${firstMistake.click}. ${firstMistake.note}`);
+  L.push(`Place it: ${firstMistake.click}. ${firstMistake.note}`);
   L.push("");
-  L.push('> Before you click, press **"What would Shipmate do?"**. It will tell you to use open');
-  L.push("> ground instead, and say why. Then click the stack anyway — you are demonstrating the");
-  L.push("> habit, not the fix. The cost meter does not move, which is exactly the point: the");
-  L.push("> mistake is invisible at the moment you make it.");
+  L.push("> Hover or drag toward that slot first and pause on it — its badge is already showing red");
+  L.push('> (~₹450), and pressing **"What would Shipmate do?"** says the same thing in words. Place it');
+  L.push("> there anyway. The **Cost incurred** meter at the top still reads ₹0, because nothing is");
+  L.push("> actually charged until the box is dug up — the gap between the warning and the bill is");
+  L.push("> the whole lesson. The verdict panel that appears will say Shipmate disagreed; press");
+  L.push('> **"Continue →"** rather than waiting it out.');
   L.push("");
 
   for (const [i, m] of money.entries()) {
@@ -181,7 +193,10 @@ function render(): string {
     L.push(`Click **Dispatch →**. ${m.note}`);
     L.push("");
     if (i === 0) {
-      L.push("> The slot flashes red and the meter moves for the first time. This is the line:");
+      L.push("> The slot flashes red and the meter moves for the first time. Scroll to **Your moves**");
+      L.push(`> below — the row for step ${m.causeStep}, where you placed the stack, flashes red for a`);
+      L.push('> few seconds tagged "← caused rehandle", drawing a direct line from that decision to');
+      L.push("> this bill. Say the line while it's flashing:");
       L.push(`> *\"That ${inr(RUPEES_PER_REHANDLE)} was decided ${m.step - m.causeStep!} steps ago, and there was no way to feel it at the time.\"*`);
       L.push("");
     }

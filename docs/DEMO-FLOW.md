@@ -19,18 +19,28 @@ You are going to play the yard the way it runs today: **stack whenever you can**
 ground space feels like the scarce resource. That instinct is the whole problem, and the
 demo makes it cost real money in front of the customer.
 
-- **Step 3** is the fateful click. Nothing appears to go wrong.
+Every arrival is a physical container in a staging chip: drag it onto a highlighted slot,
+or just tap the slot directly — both place it identically. Every legal slot carries a live
+cost badge (green ₹0, amber ~₹135, red ₹450) before you commit to it, and the instant you
+place a box, the same card tells you whether that matched what Shipmate would have done —
+holding for a couple of seconds, or press **"Continue →"** to move on immediately. None of
+that stops you from placing it badly anyway, which is the point.
+
+- **Step 3** is the fateful placement — the slot's own badge is already red.
 - **Step 8** is where the bill arrives — the meter moves for the first time.
 - By the end you are at **6 rehandles, ₹2,700**.
 - Shipmate, on the identical sequence, finishes at **1 (₹450)**.
 
-Total: **25 clicks**, about two to three minutes.
+Total: **25 moves**, about two to three minutes.
 
 ---
 
-## Full click-by-click
+## Full move-by-move
 
-| # | Time | What appears | Click | Cost after |
+Drag onto the named slot, or tap it — either places the box. Pickups are always
+**Dispatch →**.
+
+| # | Time | What appears | Place | Cost after |
 |---|---|---|---|---|
 | 1 | Day 1, 03:00 | **SMLU000000** · 40ft · Import non-DPD · predicted dwell **~69h** | Slot 6 → **GROUND** | ₹0 |
 | 2 | Day 1, 06:00 | **SMCU000001** · 20ft · Import non-DPD · predicted dwell **~14h** | Slot 1 → **GROUND** | ₹0 |
@@ -62,18 +72,20 @@ Total: **25 clicks**, about two to three minutes.
 
 ## The moments to actually narrate
 
-Everything else is just clicking. These are the beats.
+Everything else is just placing boxes. These are the beats.
 
 ### Step 3 — the mistake nobody notices
 
 **SMCU000002** · 20ft · Import non-DPD · predicted dwell **~25h**
 
-Click Slot 1 → **STACK HERE**. Buries SMCU000001, which is forecast out 12h **before** this box. A rehandle is now essentially booked.
+Place it: Slot 1 → **STACK HERE**. Buries SMCU000001, which is forecast out 12h **before** this box. A rehandle is now essentially booked.
 
-> Before you click, press **"What would Shipmate do?"**. It will tell you to use open
-> ground instead, and say why. Then click the stack anyway — you are demonstrating the
-> habit, not the fix. The cost meter does not move, which is exactly the point: the
-> mistake is invisible at the moment you make it.
+> Hover or drag toward that slot first and pause on it — its badge is already showing red
+> (~₹450), and pressing **"What would Shipmate do?"** says the same thing in words. Place it
+> there anyway. The **Cost incurred** meter at the top still reads ₹0, because nothing is
+> actually charged until the box is dug up — the gap between the warning and the bill is
+> the whole lesson. The verdict panel that appears will say Shipmate disagreed; press
+> **"Continue →"** rather than waiting it out.
 
 ### Step 8 — the first bill
 
@@ -81,7 +93,10 @@ Click Slot 1 → **STACK HERE**. Buries SMCU000001, which is forecast out 12h **
 
 Click **Dispatch →**. **REHANDLE 1.** Buried under SMCU000002, which you stacked at step 3. +₹450
 
-> The slot flashes red and the meter moves for the first time. This is the line:
+> The slot flashes red and the meter moves for the first time. Scroll to **Your moves**
+> below — the row for step 3, where you placed the stack, flashes red for a
+> few seconds tagged "← caused rehandle", drawing a direct line from that decision to
+> this bill. Say the line while it's flashing:
 > *"That ₹450 was decided 5 steps ago, and there was no way to feel it at the time."*
 
 ### Step 11 — rehandle 2

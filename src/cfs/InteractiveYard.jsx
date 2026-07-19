@@ -3,7 +3,7 @@ import { C } from "../data/constants.js";
 import { RUPEES_PER_REHANDLE } from "./sim/engine.ts";
 import {
   DEFAULT_DEMO_SEED, HORIZON_HOURS, SCENARIO_SLOTS,
-  applyArrival, applyPickup, buildScenarioYard, chooseSlot, generateScenario,
+  applyArrival, applyPickup, buildScenarioYard, chooseSlot, costPreview, generateScenario,
   legalPlacements, replayWithPolicy,
 } from "./sim/scenario.ts";
 
@@ -16,10 +16,22 @@ const BUCKET_COLOR = { short: "#2ECC71", medium: "#E8A838", long: "#8B7BF0" };
 const BUCKET_LABEL = { short: "leaves soon", medium: "mid dwell", long: "long dwell" };
 const FLASH = "#E74C3C";
 
+/** Risk colours for the live cost preview — colour-coded slot borders. */
+const RISK_COLOR = { safe: "#2ECC71", risky: "#E8A838", danger: "#E74C3C" };
+const RISK_BORDER = { safe: C.accent, risky: "#E8A838", danger: "#E74C3C" };
+
 /** Every transition is kept under 400ms so a turn feels immediate. */
 const ANIM_MS = 340;
 /** Replay pace — slow enough to read the rationale on each move. */
 const REPLAY_MS = 1500;
+/**
+ * How long the post-move "did that match Shipmate?" verdict stays up before
+ * auto-advancing — long enough to read, short enough not to stall a demo.
+ * "Continue →" skips the wait for anyone who doesn't want it.
+ */
+const FEEDBACK_MS = 1300;
+/** Pointer movement, in px, before a press on the staged container counts as a drag rather than a tap. */
+const DRAG_THRESHOLD = 6;
 
 const inr = n => "₹" + Math.round(n).toLocaleString("en-IN");
 const hoursLabel = h => `Day ${Math.floor(h / 24) + 1}, ${String(Math.floor(h % 24)).padStart(2, "0")}:00`;
@@ -64,7 +76,7 @@ function ContainerBox({ x, y, container, flash, dim, ghost }) {
   );
 }
 
-function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pickingSlot, interactive }) {
+function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pickingSlot, interactive, costPreviews }) {
   const legalKey = useMemo(
     () => new Set((legal || []).map(p => `${p.slotIndex}:${p.tier}`)),
     [legal]
@@ -95,6 +107,7 @@ function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pi
               const key = `${slot.index}:${tier}`;
               const isLegal = legalKey.has(key);
               const isHovered = hovered && hovered.slotIndex === slot.index && hovered.tier === tier;
+              const cp = costPreviews && costPreviews[key];
 
               if (container) {
                 return (
@@ -103,25 +116,45 @@ function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pi
                 );
               }
 
+              // Risk-coded colours for the live cost preview
+              const riskColor = cp ? RISK_BORDER[cp.risk] : C.accent;
+              const fillHover = cp ? RISK_COLOR[cp.risk] + "33" : C.accent + "33";
+              const fillIdle = cp ? RISK_COLOR[cp.risk] + "12" : C.accent + "12";
+
               return (
                 <g key={tier}
+                  data-slot-index={slot.index}
+                  data-tier={tier}
                   onClick={isLegal && interactive ? () => onPick({ slotIndex: slot.index, tier }) : undefined}
                   onMouseEnter={isLegal && interactive ? () => setHovered({ slotIndex: slot.index, tier }) : undefined}
                   onMouseLeave={isLegal && interactive ? () => setHovered(null) : undefined}
                   style={{ cursor: isLegal && interactive ? "pointer" : "default" }}>
                   <rect
                     x={x} y={y} width={CELL_W} height={CELL_H} rx={7}
-                    fill={isHovered ? C.accent + "33" : isLegal ? C.accent + "12" : "transparent"}
-                    stroke={isLegal ? C.accent : C.border}
+                    fill={isHovered ? fillHover : isLegal ? fillIdle : "transparent"}
+                    stroke={isLegal ? riskColor : C.border}
                     strokeWidth={isHovered ? 3 : isLegal ? 1.8 : 1}
                     strokeDasharray={isLegal ? undefined : "4 4"}
                     style={{ transition: `fill ${ANIM_MS}ms ease, stroke-width 120ms ease` }}
                   />
                   {isLegal && (
-                    <text x={x + CELL_W / 2} y={y + CELL_H / 2 + 5} fontSize={12} textAnchor="middle"
-                      fill={C.accent} {...mono}>
-                      {tier === 1 ? "STACK HERE" : "GROUND"}
-                    </text>
+                    <>
+                      <text x={x + CELL_W / 2} y={y + CELL_H / 2 - 2} fontSize={12} textAnchor="middle"
+                        fill={riskColor} {...mono}>
+                        {tier === 1 ? "STACK" : "GROUND"}
+                      </text>
+                      {/* Cost badge */}
+                      {cp && (
+                        <>
+                          <rect x={x + CELL_W / 2 - 24} y={y + CELL_H / 2 + 6} width={48} height={18} rx={9}
+                            fill={RISK_COLOR[cp.risk] + "28"} stroke={RISK_COLOR[cp.risk]} strokeWidth={1} />
+                          <text x={x + CELL_W / 2} y={y + CELL_H / 2 + 19} fontSize={10} textAnchor="middle"
+                            fill={RISK_COLOR[cp.risk]} fontWeight="700" {...mono}>
+                            {cp.badge}
+                          </text>
+                        </>
+                      )}
+                    </>
                   )}
                 </g>
               );
@@ -130,6 +163,34 @@ function YardElevation({ yard, legal, onPick, hovered, setHovered, flashSlot, pi
         );
       })}
     </svg>
+  );
+}
+
+/** Floating copy of the staged container that tracks the pointer while dragging. */
+function DragGhost({ x, y, container, costLabel }) {
+  const colour = BUCKET_COLOR[container.bucket];
+  const w = 92, h = 76;
+  return (
+    <div style={{
+      position: "fixed", left: x - w / 2, top: y - h / 2 - 24, width: w, height: h,
+      pointerEvents: "none", zIndex: 1000,
+      background: colour + "3A", border: `2px solid ${colour}`, borderRadius: 8,
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 10px 26px rgba(0,0,0,0.45)", transform: "scale(1.05) rotate(-1.5deg)",
+    }}>
+      <span style={{ fontSize: 13, fontWeight: 700, ...mono, color: colour }}>{container.size}FT</span>
+      <span style={{ fontSize: 10, ...mono, color: C.text }}>{container.id}</span>
+      {costLabel && (
+        <span style={{
+          fontSize: 10, fontWeight: 700, ...mono, marginTop: 3, padding: "2px 8px",
+          borderRadius: 6,
+          background: costLabel.risk === "danger" ? RISK_COLOR.danger + "33" : costLabel.risk === "risky" ? RISK_COLOR.risky + "33" : RISK_COLOR.safe + "33",
+          color: RISK_COLOR[costLabel.risk],
+        }}>
+          {costLabel.badge}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -167,12 +228,27 @@ export default function InteractiveYard() {
   const [hintsUsed, setHintsUsed] = useState(0);
   const [log, setLog] = useState([]);
   const [busy, setBusy] = useState(false);
+  // Set the instant a placement lands, cleared once the verdict is dismissed
+  // (timeout or "Continue →"). Drives the in-card verdict below.
+  const [feedback, setFeedback] = useState(null);
+  // In-progress drag of the staged incoming container. `active` only flips
+  // true once the pointer clears DRAG_THRESHOLD, so a plain tap on the chip
+  // is never mistaken for a failed drag.
+  const [drag, setDrag] = useState(null);
+  // Running cost history for the inline sparkline chart.
+  const [costHistory, setCostHistory] = useState([{ step: 0, you: 0, shipmate: 0 }]);
+  // Index of the log entry currently highlighted by the blame trail.
+  const [blameIdx, setBlameIdx] = useState(null);
 
   // Replay mode ("Replay as Shipmate"). The replay drives the same `yard` state,
   // so the operator's finished yard is snapshotted before it is overwritten.
   const [replayIdx, setReplayIdx] = useState(null);
   const savedYard = useRef(null);
   const timers = useRef([]);
+  // Drag-start info that must not change mid-gesture (pointerId, origin, and
+  // whether the threshold has been cleared). Lives in a ref rather than state
+  // so the window listener below doesn't need to re-bind on every pointermove.
+  const dragRef = useRef(null);
 
   const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
   useEffect(() => clearTimers, []);
@@ -189,7 +265,12 @@ export default function InteractiveYard() {
     setHintsUsed(0);
     setLog([]);
     setBusy(false);
+    setFeedback(null);
+    setDrag(null);
+    dragRef.current = null;
     setReplayIdx(null);
+    setCostHistory([{ step: 0, you: 0, shipmate: 0 }]);
+    setBlameIdx(null);
     savedYard.current = null;
   }, [seed]);
 
@@ -197,10 +278,22 @@ export default function InteractiveYard() {
   const finished = cursor >= scenario.events.length;
   const replaying = replayIdx !== null;
 
+  // Cleared while `feedback` is showing — the container is already placed, so
+  // there is nothing left to highlight until the next event arrives.
   const legal = useMemo(
-    () => (event && event.kind === "arrival" && !replaying ? legalPlacements(yard, event.container) : []),
-    [event, yard, replaying]
+    () => (event && event.kind === "arrival" && !replaying && !feedback ? legalPlacements(yard, event.container) : []),
+    [event, yard, replaying, feedback]
   );
+
+  // Cost preview for every legal position — fed into the SVG for risk badges.
+  const costPreviews = useMemo(() => {
+    if (!event || event.kind !== "arrival" || legal.length === 0) return null;
+    const map = {};
+    for (const p of legal) {
+      map[`${p.slotIndex}:${p.tier}`] = costPreview(yard, event.container, p, event.hour);
+    }
+    return map;
+  }, [event, yard, legal]);
 
   // Derived from the operator's own move log rather than the live yard, so the
   // Shipmate replay (which reuses `yard`) cannot overwrite their result.
@@ -211,14 +304,36 @@ export default function InteractiveYard() {
   const place = p => {
     if (busy || !event || event.kind !== "arrival") return;
     const advice = chooseSlot(yard, event.container);
-    const agreed = advice && advice.slotIndex === p.slotIndex && advice.tier === p.tier;
+    const agreed = !!advice && advice.slotIndex === p.slotIndex && advice.tier === p.tier;
+    const preview = costPreview(yard, event.container, p, event.hour);
     setYard(applyArrival(yard, event.container, p));
     setHovered(null);
     setHint(null);
+    setDrag(null);
     setLog(l => [...l, {
-      hour: event.hour, kind: "arrival", text: `Placed ${event.container.id} in slot ${p.slotIndex + 1} ${p.tier === 1 ? "(stacked)" : "(ground)"}`,
+      hour: event.hour, kind: "arrival",
+      text: `Placed ${event.container.id} in slot ${p.slotIndex + 1} ${p.tier === 1 ? "(stacked)" : "(ground)"}`,
       agreed,
+      containerId: event.container.id,
+      slotIndex: p.slotIndex,
+      tier: p.tier,
+      risk: preview.risk,
     }]);
+    // Hold on the current event, showing the verdict, before moving on — that
+    // verdict is the whole point of moving the box yourself.
+    setFeedback({ agreed, advice, placed: p });
+    setBusy(true);
+    timers.current.push(setTimeout(() => {
+      setFeedback(null);
+      setBusy(false);
+      setCursor(c => c + 1);
+    }, FEEDBACK_MS));
+  };
+
+  const skipFeedback = () => {
+    clearTimers();
+    setFeedback(null);
+    setBusy(false);
     setCursor(c => c + 1);
   };
 
@@ -233,12 +348,30 @@ export default function InteractiveYard() {
       setFlashSlot(null);
       setPickingSlot(null);
       setHint(null);
+      // Blame trail: find the arrival log entry that placed the blocking container
+      const causedByStep = res.rehandled
+        ? log.findIndex(l => l.kind === "arrival" && l.containerId === res.movedContainerId)
+        : null;
       setLog(l => [...l, {
         hour: event.hour, kind: "pickup", rehandled: res.rehandled,
+        causedByStep: causedByStep != null && causedByStep >= 0 ? causedByStep : null,
         text: res.rehandled
           ? `${event.containerId} was buried — lifted ${res.movedContainerId} off first (+${inr(RUPEES_PER_REHANDLE)})`
           : `${event.containerId} lifted straight out — no shuffle`,
       }]);
+      // Update cost history for sparkline
+      const newRehandles = log.filter(l => l.rehandled).length + (res.rehandled ? 1 : 0);
+      const aiCost = aiReplay.moves.filter((m, mi) => m.rehandled && mi <= cursor).reduce((s) => s + 1, 0);
+      setCostHistory(h => [...h, {
+        step: h.length,
+        you: newRehandles * RUPEES_PER_REHANDLE,
+        shipmate: aiCost * RUPEES_PER_REHANDLE,
+      }]);
+      // Flash the blame trail briefly
+      if (causedByStep != null && causedByStep >= 0) {
+        setBlameIdx(causedByStep);
+        timers.current.push(setTimeout(() => setBlameIdx(null), 4000));
+      }
       setCursor(c => c + 1);
       setBusy(false);
     }, ANIM_MS));
@@ -261,6 +394,66 @@ export default function InteractiveYard() {
     }
     setHintsUsed(n => n + 1);
   };
+
+  // ── drag the staged container onto a slot ──────────────────────────────────
+  const dropTargetAt = (clientX, clientY) => {
+    const el = document.elementFromPoint(clientX, clientY);
+    const cellEl = el && el.closest ? el.closest("[data-slot-index]") : null;
+    if (!cellEl) return null;
+    const slotIndex = Number(cellEl.getAttribute("data-slot-index"));
+    const tier = Number(cellEl.getAttribute("data-tier"));
+    return legal.some(p => p.slotIndex === slotIndex && p.tier === tier) ? { slotIndex, tier } : null;
+  };
+
+  const handleDragStart = e => {
+    if (busy || !event || event.kind !== "arrival" || replaying || finished) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // Best-effort only — correctness below does not depend on this succeeding.
+    // Relying on capture alone meant that if it failed or behaved differently
+    // across browsers/trackpads, the drag would die the instant the pointer
+    // left this 92x60 chip, before ever reaching a slot.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+    e.preventDefault();
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, active: false };
+    setDrag({ x: e.clientX, y: e.clientY, active: false });
+  };
+
+  // Tracks the gesture via window-level listeners rather than relying on the
+  // originating element to keep receiving events — works regardless of
+  // pointer capture support, and regardless of which element the pointer
+  // ends up over.
+  useEffect(() => {
+    if (!drag) return undefined;
+    const onMove = e => {
+      const st = dragRef.current;
+      if (!st || e.pointerId !== st.pointerId) return;
+      const dx = e.clientX - st.startX, dy = e.clientY - st.startY;
+      if (!st.active && Math.hypot(dx, dy) > DRAG_THRESHOLD) st.active = true;
+      setDrag({ x: e.clientX, y: e.clientY, active: st.active });
+      setHovered(st.active ? dropTargetAt(e.clientX, e.clientY) : null);
+    };
+    const onUp = e => {
+      const st = dragRef.current;
+      dragRef.current = null;
+      if (!st || e.pointerId !== st.pointerId) { setDrag(null); return; }
+      setDrag(null);
+      setHovered(null);
+      if (!st.active) return; // a tap on the chip, not a drag — nothing to do
+      const target = dropTargetAt(e.clientX, e.clientY);
+      if (target) place(target);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    // Only (re)bind when a drag starts or ends, not on every intermediate
+    // position update — `drag !== null` alone captures that transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag !== null]);
 
   // ── replay as Shipmate ─────────────────────────────────────────────────────
   const startReplay = () => {
@@ -293,6 +486,9 @@ export default function InteractiveYard() {
 
   // ── hover detail: what sits under the position being considered ────────────
   const hoverGroundBox = hovered && hovered.tier === 1 ? yard.slots[hovered.slotIndex].stack[0] : null;
+  const hoverIsOpenGround = hovered && hovered.tier === 0;
+  // Cost preview for the currently hovered slot (for the drag ghost label + tooltip text)
+  const hoveredCostPreview = hovered && costPreviews ? costPreviews[`${hovered.slotIndex}:${hovered.tier}`] : null;
 
   const progress = (Math.min(cursor, scenario.events.length) / scenario.events.length) * 100;
   const beat = aiReplay.rehandles - userRehandles;
@@ -300,8 +496,14 @@ export default function InteractiveYard() {
   const shownRehandles = replaying && replayMove ? replayMove.rehandlesSoFar : userRehandles;
   const shownCost = shownRehandles * RUPEES_PER_REHANDLE;
 
+  const interactive = !busy && !replaying && !finished && !(drag && drag.active);
+
   return (
     <>
+      {drag && drag.active && event && event.kind === "arrival" && (
+        <DragGhost x={drag.x} y={drag.y} container={event.container} costLabel={hoveredCostPreview} />
+      )}
+
       <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 6, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 17, fontWeight: 600, margin: 0 }}>Operate the Yard</h1>
         <span style={{ fontSize: 13, color: C.muted, ...mono }}>
@@ -310,8 +512,9 @@ export default function InteractiveYard() {
       </div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 20, maxWidth: 860, lineHeight: 1.6 }}>
         You are the yard planner. Every box that arrives has to go somewhere, and nothing moves until you decide.
+        Drag it onto a slot — or tap one — and see immediately whether that was the move Shipmate would have made.
         Bury a box that gets called for early and you pay {inr(RUPEES_PER_REHANDLE)} to dig it out. At the end,
-        we replay the identical sequence using Shipmate&rsquo;s placement rule and compare.
+        replay the identical sequence using Shipmate&rsquo;s rule and compare.
       </div>
 
       {/* ── meters ── */}
@@ -327,9 +530,39 @@ export default function InteractiveYard() {
         <Stat label="Seed" value={seed} sub="deterministic scenario" tone={C.accent} />
       </div>
 
-      <div style={{ height: 5, background: C.bg, borderRadius: 3, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 20 }}>
+      <div style={{ height: 5, background: C.bg, borderRadius: 3, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 10 }}>
         <div style={{ width: `${progress}%`, height: "100%", background: C.accent, transition: "width 200ms ease" }} />
       </div>
+
+      {/* ── cost sparkline ── */}
+      {costHistory.length > 1 && !replaying && (
+        <div style={{ ...card, padding: "12px 16px", marginBottom: 20 }}>
+          <div style={{ ...sectionTitle, marginBottom: 6 }}>Running cost</div>
+          <svg viewBox={`0 0 ${Math.max(costHistory.length * 20, 200)} 60`} width="100%" height={60}
+            style={{ display: "block" }} preserveAspectRatio="none">
+            {/* Shipmate line */}
+            <polyline
+              fill="none" stroke={C.accent} strokeWidth={2} strokeDasharray="4 3"
+              points={costHistory.map((p, i) => `${i * (Math.max(costHistory.length * 20, 200) / costHistory.length)},${60 - (p.shipmate / Math.max(userCost, aiReplay.costRupees, 1)) * 50}`).join(" ")}
+            />
+            {/* User line */}
+            <polyline
+              fill="none" stroke={userCost > aiReplay.costRupees ? C.red : C.green} strokeWidth={2.5}
+              points={costHistory.map((p, i) => `${i * (Math.max(costHistory.length * 20, 200) / costHistory.length)},${60 - (p.you / Math.max(userCost, aiReplay.costRupees, 1)) * 50}`).join(" ")}
+            />
+          </svg>
+          <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 10.5, color: C.muted }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 16, height: 2, background: userCost > aiReplay.costRupees ? C.red : C.green, display: "inline-block" }} />
+              You: {inr(userCost)}
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 16, height: 2, background: C.accent, display: "inline-block", borderTop: "1px dashed " + C.accent }} />
+              Shipmate: {inr(aiReplay.costRupees)}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* ── event card / replay narration ── */}
       {replaying ? (
@@ -352,7 +585,7 @@ export default function InteractiveYard() {
           )}
         </div>
       ) : finished ? null : event.kind === "arrival" ? (
-        <div style={{ ...card, borderColor: C.accent }}>
+        <div style={{ ...card, borderColor: feedback ? (feedback.agreed ? C.green : C.accent) : C.accent }}>
           <div style={sectionTitle}>Arrival · {hoursLabel(event.hour)}</div>
           <div style={{ display: "flex", gap: 26, flexWrap: "wrap", alignItems: "center" }}>
             <div>
@@ -374,21 +607,78 @@ export default function InteractiveYard() {
                 {BUCKET_LABEL[event.container.bucket]}
               </div>
             </div>
-            <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: C.accent }}>
-              Pick a highlighted position below.
-              {hoverGroundBox && (
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
-                  Stacking on <span style={mono}>{hoverGroundBox.id}</span>, forecast out in{" "}
-                  <span style={{ ...mono, color: BUCKET_COLOR[hoverGroundBox.bucket] }}>
-                    ~{Math.round(hoverGroundBox.predictedDepartureHour - event.hour)}h
-                  </span>
-                  {hoverGroundBox.predictedDepartureHour <= event.container.predictedDepartureHour && (
-                    <span style={{ color: C.red }}> — that is sooner than this box, so it would get buried.</span>
+
+            {feedback ? (
+              <>
+                <div style={{ flex: 1, minWidth: 240, fontSize: 13, lineHeight: 1.55 }}>
+                  {feedback.agreed ? (
+                    <span style={{ color: C.green }}>
+                      ✓ That&rsquo;s exactly what Shipmate would have done — slot {feedback.placed.slotIndex + 1},{" "}
+                      {feedback.placed.tier === 1 ? "stacked" : "ground"}.
+                    </span>
+                  ) : feedback.advice ? (
+                    <>
+                      <span style={{ color: C.text }}>
+                        You used slot {feedback.placed.slotIndex + 1} ({feedback.placed.tier === 1 ? "stacked" : "ground"}).{" "}
+                      </span>
+                      <span style={{ color: C.accent }}>
+                        Shipmate would use slot {feedback.advice.slotIndex + 1} instead ({feedback.advice.tier === 1 ? "stacked" : "ground"}):
+                      </span>
+                      <div style={{ color: C.muted, marginTop: 4 }}>{feedback.advice.rationale}</div>
+                    </>
+                  ) : (
+                    <span style={{ color: C.muted }}>Shipmate had no safer option here either.</span>
                   )}
                 </div>
-              )}
-            </div>
-            <button onClick={askHint} style={bigBtn(C.accent)}>What would Shipmate do?</button>
+                <button onClick={skipFeedback} style={bigBtn(C.accent)}>Continue →</button>
+              </>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div
+                    onPointerDown={handleDragStart}
+                    style={{
+                      width: 92, height: 60, borderRadius: 8, flexShrink: 0,
+                      background: BUCKET_COLOR[event.container.bucket] + "2E",
+                      border: `2px solid ${BUCKET_COLOR[event.container.bucket]}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: drag ? "grabbing" : "grab", touchAction: "none", userSelect: "none",
+                      opacity: drag && drag.active ? 0.3 : 1,
+                      transition: "opacity 150ms ease",
+                    }}
+                  >
+                    <span style={{ fontSize: 10, ...mono, color: BUCKET_COLOR[event.container.bucket], textAlign: "center", lineHeight: 1.3 }}>
+                      DRAG<br />ME
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.accent, maxWidth: 260 }}>
+                    Drag onto a highlighted slot, or tap one directly.
+                    {hoveredCostPreview && (
+                      <div style={{ fontSize: 12, color: RISK_COLOR[hoveredCostPreview.risk], marginTop: 6, lineHeight: 1.5 }}>
+                        {hoveredCostPreview.rationale}
+                      </div>
+                    )}
+                    {!hoveredCostPreview && hoverGroundBox && (
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
+                        Stacking on <span style={mono}>{hoverGroundBox.id}</span>, forecast out in{" "}
+                        <span style={{ ...mono, color: BUCKET_COLOR[hoverGroundBox.bucket] }}>
+                          ~{Math.round(hoverGroundBox.predictedDepartureHour - event.hour)}h
+                        </span>
+                        {hoverGroundBox.predictedDepartureHour <= event.container.predictedDepartureHour && (
+                          <span style={{ color: C.red }}> — that is sooner than this box, so it would get buried.</span>
+                        )}
+                      </div>
+                    )}
+                    {!hoveredCostPreview && hoverIsOpenGround && (
+                      <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>
+                        Open ground — nothing sits beneath it, so it can never be buried later.
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={askHint} style={bigBtn(C.accent)}>What would Shipmate do?</button>
+              </>
+            )}
           </div>
         </div>
       ) : (
@@ -441,7 +731,8 @@ export default function InteractiveYard() {
               setHovered={setHovered}
               flashSlot={flashSlot}
               pickingSlot={pickingSlot}
-              interactive={!busy && !replaying && !finished}
+              interactive={interactive}
+              costPreviews={costPreviews}
             />
           </div>
         </div>
@@ -509,12 +800,25 @@ export default function InteractiveYard() {
             {log.map((l, i) => (
               <div key={i} style={{
                 display: "flex", gap: 10, alignItems: "baseline", fontSize: 12.5,
-                color: l.rehandled ? C.red : C.muted,
+                color: l.rehandled ? C.red : blameIdx === i ? "#E74C3C" : C.muted,
+                background: blameIdx === i ? "#E74C3C12" : "transparent",
+                borderRadius: blameIdx === i ? 5 : 0,
+                padding: blameIdx === i ? "3px 6px" : 0,
+                transition: "background 300ms ease, color 300ms ease",
               }}>
-                <span style={{ ...mono, fontSize: 11, color: C.border, minWidth: 74 }}>{hoursLabel(l.hour)}</span>
+                <span style={{ ...mono, fontSize: 11, color: blameIdx === i ? "#E74C3C" : C.border, minWidth: 74 }}>{hoursLabel(l.hour)}</span>
                 <span>{l.text}</span>
                 {l.kind === "arrival" && l.agreed === false && (
                   <span style={{ fontSize: 10.5, color: C.yellow, ...mono }}>· differs from Shipmate</span>
+                )}
+                {l.kind === "arrival" && l.risk === "danger" && (
+                  <span style={{ fontSize: 10.5, color: RISK_COLOR.danger, ...mono }}>⚠ rehandle risk</span>
+                )}
+                {l.kind === "arrival" && l.risk === "risky" && (
+                  <span style={{ fontSize: 10.5, color: RISK_COLOR.risky, ...mono }}>⚠ tight margin</span>
+                )}
+                {blameIdx === i && (
+                  <span style={{ fontSize: 10.5, color: "#E74C3C", ...mono, fontWeight: 600 }}>← caused rehandle</span>
                 )}
               </div>
             ))}
