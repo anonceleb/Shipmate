@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { C } from "../data/constants.js";
 import { RUPEES_PER_REHANDLE, runToCompletion } from "./sim/engine.ts";
 import InteractiveYard from "./InteractiveYard.jsx";

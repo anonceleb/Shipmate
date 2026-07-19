@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { C } from "../data/constants.js";
 import { RUPEES_PER_REHANDLE } from "./sim/engine.ts";
 import {
-  DEFAULT_DEMO_SEED, HORIZON_HOURS, SCENARIO_SLOTS, SCENARIO_SLOT_SIZES,
+  DEFAULT_DEMO_SEED, HORIZON_HOURS, SCENARIO_SLOTS,
   applyArrival, applyPickup, buildScenarioYard, chooseSlot, costPreview, generateScenario,
   legalPlacements, replayWithPolicy,
 } from "./sim/scenario.ts";
