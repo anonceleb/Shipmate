@@ -26,6 +26,12 @@ place a box, the same card tells you whether that matched what Shipmate would ha
 holding for a couple of seconds, or press **"Continue →"** to move on immediately. None of
 that stops you from placing it badly anyway, which is the point.
 
+The **gate queue** above the yard shows the next 3 events (arrivals and pickups),
+the **yard utilisation gauge** shows how full the yard is (and why you feel
+compelled to stack), and the **cost sparkline** builds a running comparison
+between your cost and Shipmate's. Toggle the **heat map** at any time to see
+which stacked pairs are safe (green), tight (amber), or LIFO-violated (red).
+
 - **Step 3** is the fateful placement — the slot's own badge is already red.
 - **Step 8** is where the bill arrives — the meter moves for the first time.
 - By the end you are at **6 rehandles, ₹2,700**.
@@ -81,11 +87,13 @@ Everything else is just placing boxes. These are the beats.
 Place it: Slot 1 → **STACK HERE**. Buries SMCU000001, which is forecast out 12h **before** this box. A rehandle is now essentially booked.
 
 > Hover or drag toward that slot first and pause on it — its badge is already showing red
-> (~₹450), and pressing **"What would Shipmate do?"** says the same thing in words. Place it
+> (~₹450), and pressing **"What would Shipmate do?"** says the same thing in words. If the
+> heat map is on, the slot pair will glow red the instant the stack forms. Place it
 > there anyway. The **Cost incurred** meter at the top still reads ₹0, because nothing is
 > actually charged until the box is dug up — the gap between the warning and the bill is
-> the whole lesson. The verdict panel that appears will say Shipmate disagreed; press
-> **"Continue →"** rather than waiting it out.
+> the whole lesson. Check the **gate queue** — SMCU000001's pickup is only a few events
+> away, building tension. The verdict panel that appears will say Shipmate disagreed;
+> press **"Continue →"** rather than waiting it out.
 
 ### Step 8 — the first bill
 
@@ -93,11 +101,15 @@ Place it: Slot 1 → **STACK HERE**. Buries SMCU000001, which is forecast out 12
 
 Click **Dispatch →**. **REHANDLE 1.** Buried under SMCU000002, which you stacked at step 3. +₹450
 
-> The slot flashes red and the meter moves for the first time. Scroll to **Your moves**
+> The slot flashes red and the meter moves for the first time. The **cost sparkline**
+> shows your line diverging from Shipmate's. Scroll to **Your moves**
 > below — the row for step 3, where you placed the stack, flashes red for a
 > few seconds tagged "← caused rehandle", drawing a direct line from that decision to
 > this bill. Say the line while it's flashing:
 > *"That ₹450 was decided 5 steps ago, and there was no way to feel it at the time."*
+>
+> Optionally type **"000001"** into the search box — the departed container is gone,
+> but the blocking box that caused the rehandle is still on yard, pulsing gold.
 
 ### Step 11 — rehandle 2
 
@@ -154,7 +166,19 @@ slots and ~800 boxes a month, which is the **Benchmark** tab.
 
 Switch to the **Benchmark** tab, press **Play** at **20×**, and let the 30-day run finish
 in about four seconds. Same rule, full-scale yard, and the gap between the two lines is
-the actual business case.
+the actual business case. Toggle **Heat map** in the legend bar to see which stacks are
+LIFO-safe across the 96-slot yard.
+
+### Handing over to Tournament
+
+Switch to the **Tournament** tab and click **▶ Run 50 scenarios**. In under a second, the
+histogram fills in — 50 independent 30-day runs, all different seeds, same config.
+
+The point to make: *"We didn't pick a friendly seed. Here are 50 random ones. The
+histogram is overwhelmingly to the right of zero — this is a structural advantage, not
+luck."*
+
+The per-seed table below the histogram lets anyone drill into a specific run.
 
 ---
 
@@ -164,9 +188,10 @@ the actual business case.
 different one and it deals a different yard. Nothing here is a recording.
 
 **"Did you pick a scenario that makes you look good?"** The seed is visible and editable;
-press **New scenario** and play a random one live. The placement rule is in
-`src/cfs/sim/README.md` §10.5 and the dwell parameters are listed as measured or
-placeholder in §11.
+press **New scenario** and play a random one live. Or switch to the **Tournament** tab and
+run 50 seeds at once — the histogram answers this question in three seconds. The placement
+rule is in `src/cfs/sim/README.md` §10.5 and the dwell parameters are listed as measured
+or placeholder in §11.
 
 **"What if the dwell prediction is wrong?"** Benchmark tab, drag **Prediction accuracy**
 down to 50% and re-run. The advantage narrows but does not vanish — §7, finding 2.
@@ -175,3 +200,7 @@ down to 50% and re-run. The advantage narrows but does not vanish — §7, findi
 ~90% ground utilisation, because there is no spare ground to exploit. Raise the arrival
 rate on Benchmark and show it. Better to volunteer this than be caught by it — §7,
 finding 3.
+
+**"What do the colours on the boxes mean?"** Toggle **Heat map** — green pairs are
+LIFO-safe, amber are tight, red are LIFO-violated and heading for a rehandle. The same
+colour logic drives the cost badges during placement.
