@@ -65,7 +65,7 @@ by a noisy dwell forecast). Top-down SVG yard views flash red on each rehandle; 
 cumulative-rehandle chart price the difference at 4 reach-stacker minutes and ₹450 per rehandle.
 
 Both modes are driven by the same pure TypeScript engine in `src/cfs/sim/`, fully separated from rendering and
-covered by 91 unit tests. Scenario generation is seeded so the human operator and the policy face a
+covered by 108 unit tests. Scenario generation is seeded so the human operator and the policy face a
 byte-identical event sequence, and the generator guarantees you can never be dealt an unplaceable box.
 **The stacking algorithm, the rehandle accounting rule, parameter provenance, validation, and known limitations
 are specified in [`src/cfs/sim/README.md`](src/cfs/sim/README.md)** — written to be cited directly in academic
@@ -149,6 +149,7 @@ Vite serves the app on http://localhost:5173 and automatically proxies `/api/*` 
 │   │       ├── types.ts        # Domain types
 │   │       ├── engine.test.ts  # 49 unit tests (`npm test`)
 │   │       ├── scenario.test.ts # 42 unit tests
+│   │       ├── docs.test.ts    # 17 tests pinning README.md's figures to the engine
 │   │       └── README.md       # Method write-up — citable in academic/IP filings
 │   ├── data/
 │   │   └── constants.js        # Full mock dataset + Claude schema prompt + color system
@@ -193,7 +194,7 @@ All amounts in INR. HS chapters and drawback rates are simplified but realistic.
 | `npm run dev`   | Start Vite dev server (with HMR)         |
 | `npm run build` | Build production bundle to `dist/`       |
 | `npm run lint`  | Run ESLint                               |
-| `npm test`      | Run the simulation-engine unit tests     |
+| `npm test`      | Run the simulation-engine unit tests (also gates CI) |
 | `npm run typecheck` | Type-check the TypeScript sim engine |
 | `npm run preview`| Preview production build locally        |
 | `node server.js`| Start the required AI proxy backend      |

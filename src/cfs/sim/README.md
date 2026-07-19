@@ -9,7 +9,7 @@ or an IP filing, and to be reproduced independently from this description alone.
 
 **Implementation:** `engine.ts` (model), `rng.ts` (stochastics), `types.ts`
 (domain types), `scenario.ts` (interactive scenario generation), and
-`engine.test.ts` + `scenario.test.ts` (91 unit tests). The engine is pure
+`engine.test.ts` + `scenario.test.ts` + `docs.test.ts` (108 unit tests). The engine is pure
 TypeScript with no rendering dependency; `../InteractiveYard.jsx` and
 `../BenchmarkYard.jsx` are presentation layers over it and contain no model
 logic.
@@ -247,7 +247,11 @@ speeds only change how often `step` is called; they cannot change the result.
 
 ## 7. Representative results
 
-Seed 42, 35% 40ft mix, 30-day run:
+Seed 42, 35% 40ft mix, 30-day run.
+
+**This table is executable.** `docs.test.ts` parses it out of this file and
+re-derives every cell from the engine, so re-tuning a constant fails the build
+rather than silently invalidating a document someone may already have cited.
 
 | λ (boxes/hr) | Accuracy | Baseline rehandles | Predictive rehandles | Forced stacks | Cost avoided |
 |---|---|---|---|---|---|
@@ -299,6 +303,12 @@ Three findings, each reproducible from the seed:
 - **The claim itself** — predictive beats baseline across five independent seeds;
   the advantage narrows as accuracy degrades; a busier yard produces more
   baseline rehandles.
+- **This document** (`docs.test.ts`) — the §7 results table is parsed from this
+  file and every cell re-derived from the engine; the three findings stated
+  under it are re-checked as inequalities; and the constants quoted in §2, §5,
+  §10.1, §10.2 and §10.6 are asserted equal to the values in the code. A change
+  to any modelling constant fails these tests, which is the signal to
+  regenerate the table.
 
 ---
 
@@ -321,8 +331,8 @@ Stated explicitly so that any citation is bounded correctly.
    queueing for machines is modelled.
 6. **Synthetic parameters.** The dwell means, type mix, and the ₹450 rate are
    representative planning figures, not measurements from a specific terminal.
-   Any external citation should re-parameterise from the operator's own data —
-   every one of these values is a named constant at the top of `engine.ts`.
+   Any external citation should re-parameterise from the operator's own data.
+   See §11.
 
 ---
 
@@ -439,3 +449,32 @@ Beyond those in §9, specific to interactive mode:
 3. **Perfect pickup notice** — the operator learns of a pickup at the moment it
    happens, with no advance call-forward. A real yard often has hours of notice,
    which would make good placement easier than the exercise implies.
+
+---
+
+## 11. Re-parameterising from real data
+
+Everything marked *placeholder* below was chosen for plausibility, not measured.
+Before any figure from this model is published or filed, replace it with the
+operator's own number. Each is a single named constant:
+
+| Constant | File | Currently | Status |
+|---|---|---|---|
+| `DWELL_MEAN_DAYS.DPD` | `engine.ts` | 2 days | supplied |
+| `DWELL_MEAN_DAYS.NONDPD` | `engine.ts` | 6 days | supplied |
+| `RUPEES_PER_REHANDLE` | `engine.ts` | ₹450 | supplied |
+| `MINUTES_PER_REHANDLE` | `engine.ts` | 4 min | supplied |
+| `DWELL_MEAN_DAYS.EXPORT` | `engine.ts` | 3 days | **placeholder** |
+| `TYPE_WEIGHTS` | `engine.ts` | 30 / 45 / 25 | **placeholder** |
+| `DWELL_SIGMA` | `engine.ts` | 0.55 | **placeholder** |
+| `noiseSigma()` mapping | `engine.ts` | σ = 2(1 − A) | **placeholder** |
+| `BLOCK_BUCKETS` | `engine.ts` | 2 / 3 / 3 blocks | **placeholder** |
+| `SCENARIO_DWELL_MEAN_HOURS` | `scenario.ts` | 14 / 46 / 26 h | **placeholder** (§10.2) |
+
+"Supplied" means the value came from the brief this model was built to. It is
+still worth confirming against the terminal's own records before publication.
+
+**Procedure.** Change the constant and run `npm test`. The §7 tests in
+`docs.test.ts` fail with the newly-derived figures in the assertion message;
+copy those into the table in §7 and re-run. The document cannot drift from the
+code without the build going red.
