@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { C } from "../data/constants.js";
 import { RUPEES_PER_REHANDLE } from "./sim/engine.ts";
 import {
-  HORIZON_HOURS, SCENARIO_SLOTS,
+  DEFAULT_DEMO_SEED, HORIZON_HOURS, SCENARIO_SLOTS,
   applyArrival, applyPickup, buildScenarioYard, chooseSlot, generateScenario,
   legalPlacements, replayWithPolicy,
 } from "./sim/scenario.ts";
@@ -16,7 +16,6 @@ const BUCKET_COLOR = { short: "#2ECC71", medium: "#E8A838", long: "#8B7BF0" };
 const BUCKET_LABEL = { short: "leaves soon", medium: "mid dwell", long: "long dwell" };
 const FLASH = "#E74C3C";
 
-const DEFAULT_SEED = 20260704;
 /** Every transition is kept under 400ms so a turn feels immediate. */
 const ANIM_MS = 340;
 /** Replay pace — slow enough to read the rationale on each move. */
@@ -155,7 +154,7 @@ const bigBtn = (accent, disabled) => ({
 });
 
 export default function InteractiveYard() {
-  const [seed, setSeed] = useState(DEFAULT_SEED);
+  const [seed, setSeed] = useState(DEFAULT_DEMO_SEED);
   const scenario = useMemo(() => generateScenario(seed), [seed]);
   const aiReplay = useMemo(() => replayWithPolicy(scenario), [scenario]);
 

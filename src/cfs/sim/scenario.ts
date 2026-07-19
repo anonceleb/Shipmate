@@ -37,6 +37,14 @@ export const HORIZON_HOURS = 72;
 export const TARGET_ARRIVALS = 13;
 
 /**
+ * The seed the interactive mode opens on, and the one docs/DEMO-FLOW.md is
+ * scripted against. Chosen for the demo: 25 events, on which a careless
+ * stack-first operator takes 6 rehandles against the policy's 1 — a clear
+ * margin, without the policy scoring a suspiciously perfect zero.
+ */
+export const DEFAULT_DEMO_SEED = 20260704;
+
+/**
  * Compressed dwell means, in hours.
  *
  * Benchmark mode uses the full-scale distributions (DPD 2d, non-DPD 6d). A
