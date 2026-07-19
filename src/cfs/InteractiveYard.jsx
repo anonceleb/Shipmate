@@ -293,6 +293,7 @@ export default function InteractiveYard() {
 
   // ── hover detail: what sits under the position being considered ────────────
   const hoverGroundBox = hovered && hovered.tier === 1 ? yard.slots[hovered.slotIndex].stack[0] : null;
+  const hoverIsOpenGround = hovered && hovered.tier === 0;
 
   const progress = (Math.min(cursor, scenario.events.length) / scenario.events.length) * 100;
   const beat = aiReplay.rehandles - userRehandles;
@@ -385,6 +386,11 @@ export default function InteractiveYard() {
                   {hoverGroundBox.predictedDepartureHour <= event.container.predictedDepartureHour && (
                     <span style={{ color: C.red }}> — that is sooner than this box, so it would get buried.</span>
                   )}
+                </div>
+              )}
+              {hoverIsOpenGround && (
+                <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>
+                  Open ground — nothing sits beneath it, so it can never be buried later.
                 </div>
               )}
             </div>
