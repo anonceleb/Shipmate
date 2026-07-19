@@ -307,6 +307,84 @@ export function chooseSlot(yard: Yard, c: Container): Advice | null {
   };
 }
 
+// ── Cost preview ─────────────────────────────────────────────────────────────
+
+export interface CostPreview {
+  /** ₹ that are essentially booked by this placement (0 for ground, RUPEES_PER_REHANDLE for a forced stack). */
+  projectedCost: number;
+  /** 'safe' = ground or LIFO-consistent with wide margin, 'risky' = LIFO-consistent but tight margin, 'danger' = LIFO-violated. */
+  risk: "safe" | "risky" | "danger";
+  /** Short label for the slot badge. */
+  badge: string;
+  /** One-line explanation of the cost consequence. */
+  rationale: string;
+}
+
+/**
+ * Evaluate the financial risk of placing container `c` at position `p`.
+ *
+ * - Ground placement: always safe, ₹0.
+ * - Stack where the box beneath leaves *later* (LIFO-consistent): safe if the
+ *   forecast margin is > 12h, risky if ≤ 12h (a 12h margin can be erased by
+ *   ordinary prediction noise).
+ * - Stack where the box beneath leaves *sooner* (LIFO-violated): danger, and
+ *   the full rehandle cost is projected.
+ *
+ * Called on every hover/drag so it must be O(1); it reads only the target slot.
+ */
+export function costPreview(
+  yard: Yard,
+  c: Container,
+  p: ScenarioPlacement,
+  currentHour: number,
+): CostPreview {
+  if (p.tier === 0) {
+    return {
+      projectedCost: 0,
+      risk: "safe",
+      badge: "₹0",
+      rationale: "Open ground — no stacking cost, can never cause a rehandle.",
+    };
+  }
+
+  const below = yard.slots[p.slotIndex].stack[0];
+  if (!below) {
+    // Should not happen (tier 1 with nothing on tier 0), but defend gracefully.
+    return { projectedCost: 0, risk: "safe", badge: "₹0", rationale: "Empty ground beneath." };
+  }
+
+  const margin = below.predictedDepartureHour - c.predictedDepartureHour;
+
+  if (margin <= 0) {
+    // Box beneath is predicted to leave *sooner* — this will likely be dug up.
+    const belowLeavesIn = Math.max(0, Math.round(below.predictedDepartureHour - currentHour));
+    return {
+      projectedCost: RUPEES_PER_REHANDLE,
+      risk: "danger",
+      badge: `₹${RUPEES_PER_REHANDLE}`,
+      rationale: `${below.id} beneath is forecast out in ~${belowLeavesIn}h — sooner than this box. A rehandle (~₹${RUPEES_PER_REHANDLE}) is almost certain.`,
+    };
+  }
+
+  if (margin <= 12) {
+    // LIFO-consistent but tight — prediction noise could invert the pair.
+    return {
+      projectedCost: Math.round(RUPEES_PER_REHANDLE * 0.3),
+      risk: "risky",
+      badge: `~₹${Math.round(RUPEES_PER_REHANDLE * 0.3)}`,
+      rationale: `${below.id} beneath leaves ~${Math.round(margin)}h later — LIFO-safe but the margin is tight. Prediction error could flip it.`,
+    };
+  }
+
+  // Wide LIFO-consistent margin — safe stack.
+  return {
+    projectedCost: 0,
+    risk: "safe",
+    badge: "₹0",
+    rationale: `${below.id} beneath is forecast out ~${Math.round(margin)}h later — comfortable margin, this box lifts off well before.`,
+  };
+}
+
 // ── Applying events ──────────────────────────────────────────────────────────
 
 export function applyArrival(yard: Yard, c: Container, p: ScenarioPlacement): Yard {
