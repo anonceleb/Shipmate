@@ -592,10 +592,9 @@ export default function InteractiveYard() {
         </span>
       </div>
       <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 20, maxWidth: 860, lineHeight: 1.6 }}>
-        You are the yard planner. Every box that arrives has to go somewhere, and nothing moves until you decide.
-        Drag it onto a slot — or tap one — and see immediately whether that was the move Shipmate would have made.
-        Bury a box that gets called for early and you pay {inr(RUPEES_PER_REHANDLE)} to dig it out. At the end,
-        replay the identical sequence using Shipmate&rsquo;s rule and compare.
+        Each arrival needs a slot: drag it, or tap one, to place it, and see immediately whether that matches
+        the move Shipmate would have made. Burying a box that gets called for early costs {inr(RUPEES_PER_REHANDLE)}
+        to dig out. At the end, the identical sequence replays under Shipmate&rsquo;s rule for comparison.
       </div>
 
       {/* ── meters ── */}
