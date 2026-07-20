@@ -5,6 +5,7 @@ import { SCHEMA_DESC_CFS, CFS_SAMPLE_QUESTIONS, TARIFF, BOOKING_SLA_DAYS } from 
 import {
   fmt, TODAY, MANALI_CAPACITY, getComputations,
 } from "./computations.js";
+import { gateRecord, customsTrail, rehandleEvents, workOrder } from "./lifecycle.js";
 import { buildPrintableHtml } from "../core/artifacts.js";
 import { useRegister } from "../core/register.js";
 import { useClaudeQuery } from "../core/query.js";
@@ -71,6 +72,8 @@ export default function CfsApp({ onSwitch }) {
   const [toast, setToast] = useState(null);
   const [issued, setIssued] = useState({});
   const [detail, setDetail] = useState(null);
+  const [detailTab, setDetailTab] = useState("gate");
+  const openDetail = (l, tab = "gate") => { setDetail(l); setDetailTab(tab); };
   const [printDoc, setPrintDoc] = useState(null);
   const [demandModal, setDemandModal] = useState(null);
   const [demandStep, setDemandStep] = useState("notice"); // "notice" | "credit"
@@ -266,6 +269,60 @@ export default function CfsApp({ onSwitch }) {
     showToast(`Movement reminder ${ref} generated & logged`);
   };
 
+  // ── Gate-in EIR (Equipment Interchange Receipt) ──────────────────────────────
+  const issueEIR = l => {
+    const g = gateRecord(l);
+    const ref = logAction("EIR", l.consignee, l.container_no, 0);
+    markIssued("EIR" + l.container_id);
+    print(`Equipment Interchange Receipt — ${l.container_no}`, `
+      <h2>Equipment Interchange Receipt (Gate-${g.gate})</h2>
+      <p>Container <b>${l.container_no}</b> (${l.size}', ${l.cargo_class}, ${l.commodity}) · Line ${l.line}</p>
+      <table>
+      <tr><td>EIR no.</td><td>${g.eir_no}</td><td>Gate date/time</td><td>${g.datetime}</td></tr>
+      <tr><td>Truck</td><td>${g.truck_no}</td><td>Driver</td><td>${g.driver}</td></tr>
+      <tr><td>Transporter</td><td>${g.transporter}</td><td>Seal no.</td><td>${g.seal_no}</td></tr>
+      <tr><td>Tare (kg)</td><td>${fmt(g.tare_kg)}</td><td>Gross (kg)</td><td>${fmt(g.gross_kg)}</td></tr>
+      <tr><td>Net cargo (kg)</td><td>${fmt(g.net_kg)}</td><td>Weighbridge</td><td>${g.weighbridge}</td></tr>
+      </table>
+      <p><b>Condition survey:</b> ${g.condition.code} — ${g.condition.label}. Seal ${g.seal_status.toLowerCase()}.</p>
+      <p>Consignee: ${l.consignee} &nbsp;·&nbsp; CHA: ${l.cha}</p>`, ref);
+    showToast(`EIR ${ref} issued for ${l.container_no}`);
+  };
+
+  // ── Rehandle invoice — bill recorded yard digs at the lift rate ──────────────
+  const issueRehandleInvoice = r => {
+    const l = r.box;
+    const ref = logAction("Rehandle Invoice", l.consignee, l.container_no, r.cost);
+    markIssued("RH" + l.container_id);
+    print(`Rehandle Invoice — ${l.container_no}`, `
+      <h2>Rehandle Invoice</h2>
+      <p>To: <b>${l.consignee}</b> (through CHA: ${l.cha})</p>
+      <p>Container <b>${l.container_no}</b> (${l.size}', ${l.commodity}) — the following unplanned lifts were carried out to access buried cargo:</p>
+      <table><tr><th>Date</th><th>Reason</th><th>Amount (₹)</th></tr>
+      ${r.events.map(e => `<tr><td>${e.date}</td><td>${e.reason}</td><td>${fmt(e.cost)}</td></tr>`).join("")}
+      <tr><th colspan="2">Total rehandle charges</th><th>₹${fmt(r.cost)} + GST</th></tr>
+      </table>
+      <p>Charged at the published lift-on/lift-off (laden) rate. Predictive slotting (Shipmate yard policy) is designed to eliminate these digs.</p>`, ref);
+    showToast(`Rehandle invoice ${ref} — ₹${fmt(r.cost)} raised`);
+  };
+
+  // ── De-stuff / stuff work order ──────────────────────────────────────────────
+  const issueWorkOrder = l => {
+    const w = workOrder(l);
+    const ref = logAction("Work Order", l.consignee, l.container_no, 0);
+    markIssued("WO" + l.container_id);
+    print(`${w.kind} Work Order — ${l.container_no}`, `
+      <h2>${w.kind} Work Order</h2>
+      <p>Container <b>${l.container_no}</b> (${l.size}', ${l.cargo_class}, ${l.commodity})</p>
+      <table>
+      <tr><td>Work order no.</td><td>${w.wo_no}</td><td>Type</td><td>${w.kind}${w.lcl ? " (LCL)" : " (FCL)"}</td></tr>
+      <tr><td>Packages</td><td>${w.packages}</td><td>Dock</td><td>${w.dock}</td></tr>
+      <tr><td>Gang</td><td>${w.crew}</td><td>Scheduled</td><td>${w.scheduled_date || "—"}</td></tr>
+      </table>
+      <p>${w.examined ? "Customs examination required — de-stuff to 25%+ under supervision. " : ""}On completion, cargo is tallied into the warehouse and the box is released for empty return.</p>`, ref);
+    showToast(`${w.kind} work order ${ref} issued for ${l.container_no}`);
+  };
+
   const issueRepricingMemo = row => {
     const ref = logAction("Repricing Memo", row.key, "—", 0);
     print("Commercial Repricing Memo", `
@@ -324,11 +381,23 @@ export default function CfsApp({ onSwitch }) {
     showToast(`Payment receipt ${ref} generated — ₹${fmt(g.net)} collected`);
   };
 
+  // ── Yard rehandles — recorded digs on in-yard boxes, billable at lift rate ──
+  // The yard twin teaches the LIFO rule that avoids these; this is the production
+  // side where rehandles that actually happened become invoice lines.
+  const YARD_REHANDLES = YARD
+    .map(l => ({ box: l, events: rehandleEvents(l) }))
+    .filter(r => r.events.length > 0)
+    .map(r => ({ ...r, cost: r.events.reduce((s, e) => s + e.cost, 0) }))
+    .sort((a, b) => b.cost - a.cost);
+  const REHANDLE_TOTAL = YARD_REHANDLES.reduce((s, r) => s + r.cost, 0);
+  const REHANDLE_COUNT = YARD_REHANDLES.reduce((s, r) => s + r.events.length, 0);
+
   const STAGES = [
     { id: "overview", label: "Overview", hint: "why this exists — three numbers", sub: "the business case" },
     { id: "quote",    label: "Quote",    hint: "commercial repricing — accounts below margin floor", sub: `${belowFloor.length} accts below floor` },
     { id: "book",     label: "Book",     hint: "advance nomination — IGM to gate-in", sub: `${BOOK_STATS.overdueCount} nominations overdue`, subColor: BOOK_STATS.overdueCount > 0 ? C.red : C.green },
-    { id: "operate",  label: "Operate",  hint: "yard & dwell tracking", sub: `₹${fmt(YARD_ACCRUED)} accruing`, subColor: C.yellow },
+    { id: "gate",     label: "Gate",     hint: "gate-in transaction — EIR, weighbridge, survey", sub: `${YARD.length} boxes on yard`, subColor: C.muted },
+    { id: "operate",  label: "Operate",  hint: "yard, dwell, rehandles & work orders", sub: `₹${fmt(YARD_ACCRUED)} accruing`, subColor: C.yellow },
     { id: "bill",     label: "Bill",     hint: "demand notices & long-stay escalation", sub: `${LONG_STAY.length} boxes past 30d` },
     { id: "recover",  label: "Recover",  hint: "tariff reconciliation & leakage recovery", sub: `₹${fmt(TOTAL_LEAKAGE)} found`, subColor: C.red },
     { id: "settle",   label: "Settle",   hint: "collections — outstanding balances against issued artifacts",
@@ -467,80 +536,199 @@ export default function CfsApp({ onSwitch }) {
         </div>
       )}
 
-      {detail && (
+      {detail && (() => {
+        const g = gateRecord(detail);
+        const cust = customsTrail(detail);
+        const rh = rehandleEvents(detail);
+        const rhTotal = rh.reduce((s, e) => s + e.cost, 0);
+        const wo = workOrder(detail);
+        const condTone = g.condition.tone === "warn" ? C.yellow : C.green;
+        const TABS = [
+          { id: "gate",    label: "Gate-in / EIR" },
+          { id: "customs", label: "Customs" },
+          { id: "charges", label: "Charges" },
+          { id: "yard",    label: detail.in_yard ? "Yard & rehandles" : "Yard history" },
+        ];
+        const kv = (k, v) => (
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "6px 0", borderBottom: `1px solid ${C.border}`, gap: 12 }}>
+            <span style={{ color: C.muted }}>{k}</span><span style={{ ...mono, textAlign: "right" }}>{v}</span>
+          </div>
+        );
+        return (
         <div onClick={() => setDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: 12, padding: 28, width: 640, maxHeight: "85vh", overflowY: "auto", border: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>{detail.container_no} <span style={{ color: C.muted, fontSize: 13 }}>· {detail.size}' {detail.cargo_class} · {detail.consignee}</span></div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 18, ...mono }}>ex-{detail.port} · arrived {detail.arrival_date} · dwell {detail.dwell}d {detail.in_yard ? "· IN YARD" : `· gated out ${detail.gate_out}`}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.card, borderRadius: 12, padding: 28, width: 680, maxHeight: "88vh", overflowY: "auto", border: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+              <div style={{ fontSize: 17, fontWeight: 600 }}>{detail.container_no} <span style={{ color: C.muted, fontSize: 13 }}>· {detail.size}' {detail.cargo_class} · {detail.consignee}</span></div>
+              <span style={{ fontSize: 11, ...mono, color: detail.in_yard ? C.yellow : C.muted, whiteSpace: "nowrap" }}>{detail.in_yard ? "● IN YARD" : "gated out"}</span>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, ...mono }}>ex-{detail.port} · {detail.line} · {detail.commodity} · arrived {detail.arrival_date} · dwell {detail.dwell}d {detail.in_yard ? "" : `· out ${detail.gate_out}`}</div>
+
+            {/* tab strip */}
+            <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${C.border}`, marginBottom: 18 }}>
+              {TABS.map(t => (
+                <button key={t.id} onClick={() => setDetailTab(t.id)} style={{
+                  padding: "8px 14px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px",
+                  color: detailTab === t.id ? C.accent : C.muted,
+                  borderBottom: `2px solid ${detailTab === t.id ? C.accent : "transparent"}`, marginBottom: -1,
+                }}>{t.label}</button>
+              ))}
+            </div>
+
+            {/* ── GATE-IN / EIR ── */}
+            {detailTab === "gate" && (
               <div>
-                <div style={sectionTitle}>
-                  {detail.stale_rate_card ? "Charges per current published tariff (Jun 2024)" : "Charges per published tariff"}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div style={sectionTitle}>Equipment interchange receipt · {g.eir_no}</div>
+                  <span style={{ fontSize: 11, ...mono, padding: "3px 9px", borderRadius: 20, background: condTone + "22", color: condTone, border: `1px solid ${condTone}` }}>{g.condition.code}</span>
                 </div>
-                {detail.billing_lines.map((b, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
-                    <span style={{ color: C.muted }}>{b.label}</span><span style={mono}>₹{fmt(b.amount)}</span>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
+                  {kv("Gate", `${g.gate} · ${g.datetime}`)}
+                  {kv("Truck", g.truck_no)}
+                  {kv("Driver", g.driver)}
+                  {kv("Transporter", g.transporter)}
+                  {kv("Seal no.", g.seal_no)}
+                  {kv("Seal status", "Intact")}
+                  {kv("Tare (kg)", fmt(g.tare_kg))}
+                  {kv("Gross (kg)", fmt(g.gross_kg))}
+                  {kv("Net cargo (kg)", fmt(g.net_kg))}
+                  {kv("Weighbridge", g.weighbridge)}
+                </div>
+                <div style={{ marginTop: 12, padding: "10px 12px", background: condTone + "14", borderRadius: 6, fontSize: 12.5, color: C.text }}>
+                  <b style={{ color: condTone }}>Survey:</b> {g.condition.label}. {g.seal_status}.
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+                  <button style={btn} onClick={() => issueEIR(detail)}>Print EIR →</button>
+                </div>
+              </div>
+            )}
+
+            {/* ── CUSTOMS (ICEGATE) ── */}
+            {detailTab === "customs" && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div style={sectionTitle}>{cust.doc_label} · {cust.doc_no}</div>
+                  <span style={{ fontSize: 10.5, ...mono, padding: "3px 9px", borderRadius: 20, background: C.accentDim, color: C.accent, border: `1px solid ${C.accent}` }}>◈ {cust.source} synced</span>
+                </div>
+                {cust.hold && (
+                  <div style={{ marginBottom: 12, padding: "9px 12px", background: C.red + "18", borderRadius: 6, fontSize: 12.5, color: C.red }}>⚠ Hold — {cust.hold}</div>
+                )}
+                <div style={{ position: "relative", paddingLeft: 6 }}>
+                  {cust.milestones.map((m, i) => (
+                    <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: 14 }}>
+                      <div style={{ marginTop: 2, width: 16, height: 16, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                        background: m.done ? C.green : "transparent", border: `1px solid ${m.done ? C.green : C.border}`, color: "#000", fontSize: 10 }}>{m.done ? "✓" : ""}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, color: m.done ? C.text : C.muted }}>{m.label}</div>
+                        <div style={{ fontSize: 11, ...mono, color: C.muted }}>{m.code} · {m.date || "pending"}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── CHARGES (billing / cost / margin) ── */}
+            {detailTab === "charges" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div>
+                  <div style={sectionTitle}>{detail.stale_rate_card ? "Charges per current published tariff (Jun 2024)" : "Charges per published tariff"}</div>
+                  {detail.billing_lines.map((b, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
+                      <span style={{ color: C.muted }}>{b.label}</span><span style={mono}>₹{fmt(b.amount)}</span>
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "8px 0", color: C.accent }}>
+                    <span>Expected (current rates)</span><span style={mono}>₹{fmt(detail.expected)}</span>
                   </div>
-                ))}
-                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "8px 0", color: C.accent }}>
-                  <span>Expected (current rates)</span><span style={mono}>₹{fmt(detail.expected)}</span>
+                  {detail.stale_rate_card && detail.invoiced_lines ? (
+                    <>
+                      <div style={{ fontSize: 11, color: C.yellow, textTransform: "uppercase", letterSpacing: "0.6px", marginTop: 14, marginBottom: 6 }}>Billing system applied — 2023 rate card</div>
+                      {detail.invoiced_lines.map((b, i) => {
+                        const expLine = detail.billing_lines.find(l => l.label === b.label);
+                        const isDiff = expLine && expLine.amount !== b.amount;
+                        return (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}`, background: isDiff ? C.red + "18" : "transparent" }}>
+                            <span style={{ color: isDiff ? C.red : C.muted }}>{b.label}</span>
+                            <span style={mono}>₹{fmt(b.amount)}{isDiff && <span style={{ color: C.red, marginLeft: 8, fontSize: 11 }}>↓ from ₹{fmt(expLine.amount)}</span>}</span>
+                          </div>
+                        );
+                      })}
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontSize: 12 }}>
+                        <span style={{ color: C.muted }}>Invoiced (2023 rate card)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
+                      </div>
+                      <div style={{ marginTop: 4, padding: "8px 10px", background: C.red + "18", borderRadius: 6, fontSize: 12, color: C.red }}>Shortfall ₹{fmt(-detail.variance)} — rate card not updated after Jun 2024 revision</div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                        <span style={{ color: C.muted }}>Invoiced (billing system)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
+                      </div>
+                      {detail.variance < 0 && <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Leakage ₹{fmt(-detail.variance)} — {detail.leak_reason}</div>}
+                    </>
+                  )}
+                </div>
+                <div>
+                  <div style={sectionTitle}>Allocated cost (activity-based)</div>
+                  {detail.cost_lines.map((b, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
+                      <span style={{ color: C.muted }}>{b.label}</span><span style={mono}>₹{fmt(b.amount)}</span>
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "8px 0" }}>
+                    <span>Cost</span><span style={mono}>₹{fmt(detail.cost)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: detail.margin >= 0 ? C.green : C.red }}>
+                    <span>Margin</span><span style={mono}>₹{fmt(detail.margin)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── YARD & REHANDLES ── */}
+            {detailTab === "yard" && (
+              <div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px", marginBottom: 16 }}>
+                  {kv("Dwell", `${detail.dwell} days`)}
+                  {kv("Direction", detail.direction)}
+                  {kv(wo.kind + " work order", wo.wo_no)}
+                  {kv("Status", wo.status)}
+                  {kv(wo.lcl ? "Packages (LCL)" : "Packages (FCL)", wo.packages)}
+                  {kv("Dock · gang", `${wo.dock} · ${wo.crew}`)}
+                  {detail.in_yard && detail.slabInfo && kv("Current slab", `₹${fmt(detail.slabInfo.currentRate)}/day`)}
+                  {detail.in_yard && detail.slabInfo && !detail.slabInfo.isMaxSlab && detail.slabInfo.daysUntilEscalation != null &&
+                    kv("Next escalation", `${detail.slabInfo.daysUntilEscalation}d → ₹${fmt(detail.slabInfo.nextRate)}/d`)}
                 </div>
 
-                {detail.stale_rate_card && detail.invoiced_lines ? (
-                  <>
-                    <div style={{ fontSize: 11, color: C.yellow, textTransform: "uppercase", letterSpacing: "0.6px", marginTop: 14, marginBottom: 6 }}>
-                      Billing system applied — 2023 rate card
-                    </div>
-                    {detail.invoiced_lines.map((b, i) => {
-                      const expLine = detail.billing_lines.find(l => l.label === b.label);
-                      const isDiff = expLine && expLine.amount !== b.amount;
-                      return (
-                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}`, background: isDiff ? C.red + "18" : "transparent" }}>
-                          <span style={{ color: isDiff ? C.red : C.muted }}>{b.label}</span>
-                          <span style={mono}>
-                            ₹{fmt(b.amount)}
-                            {isDiff && <span style={{ color: C.red, marginLeft: 8, fontSize: 11 }}>↓ from ₹{fmt(expLine.amount)}</span>}
-                          </span>
-                        </div>
-                      );
-                    })}
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontSize: 12 }}>
-                      <span style={{ color: C.muted }}>Invoiced (2023 rate card)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
-                    </div>
-                    <div style={{ marginTop: 4, padding: "8px 10px", background: C.red + "18", borderRadius: 6, fontSize: 12, color: C.red }}>
-                      Shortfall ₹{fmt(-detail.variance)} — rate card not updated after Jun 2024 revision
-                    </div>
-                  </>
+                <div style={sectionTitle}>Rehandles {rh.length > 0 ? `· ₹${fmt(rhTotal)} billable` : ""}</div>
+                {rh.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: C.green, padding: "6px 0" }}>✓ No rehandles — box was never dug out.</div>
                 ) : (
                   <>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                      <span style={{ color: C.muted }}>Invoiced (billing system)</span><span style={mono}>₹{fmt(detail.invoiced)}</span>
-                    </div>
-                    {detail.variance < 0 && <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>Leakage ₹{fmt(-detail.variance)} — {detail.leak_reason}</div>}
+                    {rh.map((e, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
+                        <span style={{ color: C.muted }}><span style={mono}>{e.date}</span> · {e.reason}</span>
+                        <span style={{ ...mono, color: C.red, whiteSpace: "nowrap" }}>₹{fmt(e.cost)}</span>
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 8, fontSize: 11.5, color: C.muted }}>Predictive slotting (Yard Twin policy) is designed to eliminate these digs.</div>
                   </>
                 )}
-              </div>
-              <div>
-                <div style={sectionTitle}>Allocated cost (activity-based)</div>
-                {detail.cost_lines.map((b, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
-                    <span style={{ color: C.muted }}>{b.label}</span><span style={mono}>₹{fmt(b.amount)}</span>
-                  </div>
-                ))}
-                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, padding: "8px 0" }}>
-                  <span>Cost</span><span style={mono}>₹{fmt(detail.cost)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: detail.margin >= 0 ? C.green : C.red }}>
-                  <span>Margin</span><span style={mono}>₹{fmt(detail.margin)}</span>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+                  {detail.in_yard && wo.status !== "Completed" && <button style={btn} onClick={() => issueWorkOrder(detail)}>{wo.kind} order →</button>}
+                  {rh.length > 0 && <button style={btn} onClick={() => issueRehandleInvoice({ box: detail, events: rh, cost: rhTotal })}>Invoice rehandles →</button>}
                 </div>
               </div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
               <button onClick={() => setDetail(null)} style={{ ...btn, borderColor: C.border, color: C.muted }}>Close</button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <LifecycleShell
         brand={{ abbr: terminal.abbr, name: `CFS Analytics Intelligence — ${terminal.label}`, subtitle: "OVERLAY ON EXISTING YARD & BILLING SYSTEMS · DEMO · SYNTHETIC DATA", color: terminal.color }}
@@ -672,6 +860,15 @@ export default function CfsApp({ onSwitch }) {
               stat={`${BOOK_STATS.conversionPct}% nominated boxes gated in · ${BOOK_STATS.overdueCount} overdue · avg lead time ${BOOK_STATS.avgLeadTime}d`}
             />
 
+            {/* ICEGATE / PCS integration status — where IGM nominations come from */}
+            <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 18px", marginBottom: 20 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, ...mono, color: C.green }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, boxShadow: `0 0 0 3px ${C.green}22` }} /> ICEGATE · connected
+              </span>
+              <span style={{ fontSize: 12, color: C.muted }}>IGM nominations and Bill-of-Entry milestones sync from ICEGATE / Port Community System.</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, ...mono, color: C.muted }}>last sync: {TODAY} 06:00 · {BOOK_STATS.nominatedCount} IGM lines</span>
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
               {[
                 ["Nominated (IGM)", BOOK_STATS.nominatedCount, C.text],
@@ -744,6 +941,59 @@ export default function CfsApp({ onSwitch }) {
             </div>
           </>
         )}
+
+        {/* ── GATE — gate-in transaction, EIR, weighbridge, survey ── */}
+        {stage === "gate" && (() => {
+          const records = YARD.map(l => ({ l, g: gateRecord(l) }));
+          const exceptions = records.filter(r => r.g.condition.tone === "warn");
+          const avgGross = records.length ? Math.round(records.reduce((s, r) => s + r.g.gross_kg, 0) / records.length) : 0;
+          return (
+            <>
+              <StageHeader
+                title="Gate operations"
+                stat={`${records.length} boxes gated in · on yard now · ${exceptions.length} survey exception${exceptions.length === 1 ? "" : "s"}`}
+              />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
+                {[
+                  ["Boxes on yard", records.length, C.text],
+                  ["Avg gross weight", `${fmt(avgGross)} kg`, C.text],
+                  ["Seals verified", `${records.length} / ${records.length}`, C.green],
+                  ["Survey exceptions", exceptions.length, exceptions.length > 0 ? C.yellow : C.green],
+                ].map(([label, value, color]) => (
+                  <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
+                    <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, ...mono, color }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={card}>
+                <div style={sectionTitle}>Gate-in register — each row carries an EIR, weighbridge reading and condition survey</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Container</th><th style={TH}>Gate date/time</th><th style={TH}>Truck / driver</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Gross (kg)</th><th style={TH}>Seal</th><th style={TH}>Survey</th><th style={TH}></th>
+                  </tr></thead>
+                  <tbody>{records.map(({ l, g }) => {
+                    const tone = g.condition.tone === "warn" ? C.yellow : C.green;
+                    return (
+                      <tr key={l.container_id}>
+                        <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => openDetail(l, "gate")}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{g.datetime}</td>
+                        <td style={{ ...TD, fontSize: 12 }}><span style={mono}>{g.truck_no}</span><div style={{ fontSize: 11, color: C.muted }}>{g.driver} · {g.transporter}</div></td>
+                        <td style={{ ...TD, ...mono, textAlign: "right" }}>{fmt(g.gross_kg)}</td>
+                        <td style={{ ...TD, ...mono, fontSize: 12 }}>{g.seal_no}</td>
+                        <td style={TD}><span style={{ fontSize: 11, ...mono, padding: "2px 8px", borderRadius: 20, background: tone + "22", color: tone, border: `1px solid ${tone}` }}>{g.condition.code}</span></td>
+                        <td style={{ ...TD, textAlign: "right" }}>
+                          {isIssued("EIR" + l.container_id) ? <span style={{ fontSize: 12, color: C.green }}>✓ Issued</span> : <button style={btn} onClick={() => issueEIR(l)}>EIR →</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              </div>
+            </>
+          );
+        })()}
 
         {/* ── OPERATE — yard & dwell ── */}
         {stage === "operate" && (
@@ -839,7 +1089,7 @@ export default function CfsApp({ onSwitch }) {
                     : "—";
                   return (
                     <tr key={l.container_id}>
-                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
+                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => openDetail(l, "yard")}>{l.container_no} <span style={{ color: C.muted }}>({l.size}')</span></td>
                       <td style={TD}>{l.consignee}<div style={{ fontSize: 11, color: C.muted }}>{l.cha}</div></td>
                       <td style={{ ...TD, fontSize: 12 }}>{l.commodity}</td>
                       <td style={{ ...TD, ...mono, textAlign: "right", fontWeight: 700, color: l.dwell > 30 ? C.red : l.dwell > 15 ? C.yellow : C.green }}>{l.dwell}d</td>
@@ -847,6 +1097,70 @@ export default function CfsApp({ onSwitch }) {
                       <td style={{ ...TD, ...mono, textAlign: "right" }}>₹{fmt(l.expected)}</td>
                       <td style={{ ...TD, textAlign: "right" }}>
                         {l.dwell > 3 && <button style={btn} onClick={() => issueDemandNotice(l)}>Demand notice →</button>}
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            </div>
+
+            {/* Rehandle charges — yard digs that became billable */}
+            <div style={card}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                <div style={sectionTitle}>Rehandles — unplanned lifts to dig out buried boxes</div>
+                <span style={{ fontSize: 12, ...mono, color: REHANDLE_TOTAL > 0 ? C.red : C.green }}>
+                  {REHANDLE_COUNT} lift{REHANDLE_COUNT === 1 ? "" : "s"} · ₹{fmt(REHANDLE_TOTAL)} billable
+                </span>
+              </div>
+              {YARD_REHANDLES.length === 0 ? (
+                <div style={{ fontSize: 13, color: C.green }}>✓ No rehandles recorded — every box came off the stack clean.</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    <th style={TH}>Container</th><th style={TH}>Consignee</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Lifts</th><th style={TH}>Last reason</th>
+                    <th style={{ ...TH, textAlign: "right" }}>Charge</th><th style={TH}></th>
+                  </tr></thead>
+                  <tbody>{YARD_REHANDLES.map(r => (
+                    <tr key={r.box.container_id}>
+                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => openDetail(r.box, "yard")}>{r.box.container_no} <span style={{ color: C.muted }}>({r.box.size}')</span></td>
+                      <td style={{ ...TD, fontSize: 13 }}>{r.box.consignee}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right" }}>{r.events.length}</td>
+                      <td style={{ ...TD, fontSize: 12, color: C.muted }}>{r.events[r.events.length - 1].reason}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right", color: C.red }}>₹{fmt(r.cost)}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        {isIssued("RH" + r.box.container_id) ? <span style={{ fontSize: 12, color: C.green }}>✓ Invoiced</span> : <button style={btn} onClick={() => issueRehandleInvoice(r)}>Invoice →</button>}
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+              <div style={{ marginTop: 12, fontSize: 11.5, color: C.muted }}>
+                These are recorded digs on real boxes. The <button onClick={() => setStage("yardtwin")} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, padding: 0, textDecoration: "underline" }}>Yard Twin</button> teaches the predictive slotting rule that prevents them before they happen.
+              </div>
+            </div>
+
+            {/* De-stuff / stuff work orders — the job that ends dwell */}
+            <div style={card}>
+              <div style={sectionTitle}>De-stuff / stuff work orders — the job that releases the box</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={TH}>Container</th><th style={TH}>Work order</th><th style={TH}>Type</th>
+                  <th style={{ ...TH, textAlign: "right" }}>Pkgs</th><th style={TH}>Dock / gang</th><th style={TH}>Status</th><th style={TH}></th>
+                </tr></thead>
+                <tbody>{YARD.map(l => {
+                  const w = workOrder(l);
+                  const statusColor = w.status === "Completed" ? C.green : w.status === "Scheduled" ? C.yellow : C.muted;
+                  return (
+                    <tr key={l.container_id}>
+                      <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => openDetail(l, "yard")}>{l.container_no}</td>
+                      <td style={{ ...TD, ...mono, fontSize: 12 }}>{w.wo_no}</td>
+                      <td style={{ ...TD, fontSize: 12 }}>{w.kind} <span style={{ color: C.muted }}>({w.lcl ? "LCL" : "FCL"})</span>{w.examined && <span style={{ color: C.yellow, fontSize: 11 }}> · exam</span>}</td>
+                      <td style={{ ...TD, ...mono, textAlign: "right" }}>{w.packages}</td>
+                      <td style={{ ...TD, fontSize: 12 }}>{w.dock} · {w.crew}</td>
+                      <td style={{ ...TD, fontSize: 12, color: statusColor }}>{w.status}</td>
+                      <td style={{ ...TD, textAlign: "right" }}>
+                        {isIssued("WO" + l.container_id) ? <span style={{ fontSize: 12, color: C.green }}>✓ Issued</span> : w.status !== "Completed" && <button style={btn} onClick={() => issueWorkOrder(l)}>Issue order →</button>}
                       </td>
                     </tr>
                   );
@@ -869,7 +1183,7 @@ export default function CfsApp({ onSwitch }) {
                   <div key={l.container_id} style={{ background: C.card, border: `1px solid ${l.dwell > 90 ? C.red : C.border}`, borderRadius: 12, padding: 22, marginBottom: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
                       <div>
-                        <span style={{ ...mono, color: C.accent, cursor: "pointer", fontSize: 16 }} onClick={() => setDetail(l)}>{l.container_no}</span>
+                        <span style={{ ...mono, color: C.accent, cursor: "pointer", fontSize: 16 }} onClick={() => openDetail(l, "charges")}>{l.container_no}</span>
                         <span style={{ color: C.muted, fontSize: 13 }}> · {l.size}' · {l.commodity} · {l.consignee} ({l.cha})</span>
                       </div>
                       <div style={{ ...mono, fontWeight: 700, fontSize: 18, color: l.dwell > 90 ? C.red : C.yellow }}>{l.dwell} days</div>
@@ -1413,7 +1727,7 @@ export default function CfsApp({ onSwitch }) {
                     </tr></thead>
                     <tbody>{staleLeaks.map(l => (
                       <tr key={l.container_id}>
-                        <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => setDetail(l)}>{l.container_no}</td>
+                        <td style={{ ...TD, ...mono, cursor: "pointer", color: C.accent }} onClick={() => openDetail(l, "charges")}>{l.container_no}</td>
                         <td style={TD}>{l.consignee}</td>
                         <td style={{ ...TD, fontSize: 12, color: C.muted }}>{l.leak_reason}</td>
                         <td style={{ ...TD, ...mono, textAlign: "right", color: C.red, fontWeight: 700 }}>₹{fmt(-l.variance)}</td>
