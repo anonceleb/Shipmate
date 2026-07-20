@@ -463,15 +463,45 @@ export default function InteractiveYard() {
   // ends up over.
   useEffect(() => {
     if (!drag) return undefined;
+    // Raw pointermove fires far faster than the display can paint (well over
+    // 60/sec on a real mouse or trackpad). Calling setDrag/setHovered on every
+    // one of them — as this used to — re-renders the whole component that
+    // often, and each render of the hover-dependent text in the event card
+    // below is a different length, so the card's height changed on every one
+    // of those renders and shoved the gate queue and yard beneath it up and
+    // down in step: the "shaking" the whole page did during a drag. Coalescing
+    // to one update per animation frame, and only touching `hovered` when the
+    // hovered *cell* actually changes (not just the raw pointer position),
+    // fixes both the wasted renders and the layout shift they were causing.
+    let rafId = null;
+    let pending = null;
+    let lastHoverKey;
+
+    const applyFrame = () => {
+      rafId = null;
+      const st = dragRef.current;
+      if (!st || !pending) return;
+      const { clientX, clientY } = pending;
+      pending = null;
+      setDrag({ x: clientX, y: clientY, active: st.active });
+      const target = st.active ? dropTargetAt(clientX, clientY) : null;
+      const key = target ? `${target.slotIndex}:${target.tier}` : "none";
+      if (key !== lastHoverKey) {
+        lastHoverKey = key;
+        setHovered(target);
+      }
+    };
+
     const onMove = e => {
       const st = dragRef.current;
       if (!st || e.pointerId !== st.pointerId) return;
       const dx = e.clientX - st.startX, dy = e.clientY - st.startY;
       if (!st.active && Math.hypot(dx, dy) > DRAG_THRESHOLD) st.active = true;
-      setDrag({ x: e.clientX, y: e.clientY, active: st.active });
-      setHovered(st.active ? dropTargetAt(e.clientX, e.clientY) : null);
+      pending = { clientX: e.clientX, clientY: e.clientY };
+      if (rafId === null) rafId = requestAnimationFrame(applyFrame);
     };
     const onUp = e => {
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
       const st = dragRef.current;
       dragRef.current = null;
       if (!st || e.pointerId !== st.pointerId) { setDrag(null); return; }
@@ -485,6 +515,7 @@ export default function InteractiveYard() {
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
@@ -703,27 +734,35 @@ export default function InteractiveYard() {
                   </div>
                   <div style={{ fontSize: 12.5, color: C.accent, maxWidth: 260 }}>
                     Drag onto a highlighted slot, or tap one directly.
-                    {hoveredCostPreview && (
-                      <div style={{ fontSize: 12, color: RISK_COLOR[hoveredCostPreview.risk], marginTop: 6, lineHeight: 1.5 }}>
-                        {hoveredCostPreview.rationale}
-                      </div>
-                    )}
-                    {!hoveredCostPreview && hoverGroundBox && (
-                      <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
-                        Stacking on <span style={mono}>{hoverGroundBox.id}</span>, forecast out in{" "}
-                        <span style={{ ...mono, color: BUCKET_COLOR[hoverGroundBox.bucket] }}>
-                          ~{Math.round(hoverGroundBox.predictedDepartureHour - event.hour)}h
-                        </span>
-                        {hoverGroundBox.predictedDepartureHour <= event.container.predictedDepartureHour && (
-                          <span style={{ color: C.red }}> — that is sooner than this box, so it would get buried.</span>
-                        )}
-                      </div>
-                    )}
-                    {!hoveredCostPreview && hoverIsOpenGround && (
-                      <div style={{ fontSize: 12, color: C.green, marginTop: 6 }}>
-                        Open ground — nothing sits beneath it, so it can never be buried later.
-                      </div>
-                    )}
+                    {/* Fixed height regardless of which (if any) of the three hover states
+                        below is showing — otherwise the card resizes on every cell the
+                        pointer crosses while dragging, and everything below it (gate queue,
+                        yard) visibly shifts in step. 56px measured against the longest real
+                        cost-preview rationale the engine actually produces (3 lines at this
+                        font/line-height/width), not a guess. */}
+                    <div style={{ minHeight: 56, marginTop: 6 }}>
+                      {hoveredCostPreview && (
+                        <div style={{ fontSize: 12, color: RISK_COLOR[hoveredCostPreview.risk], lineHeight: 1.5 }}>
+                          {hoveredCostPreview.rationale}
+                        </div>
+                      )}
+                      {!hoveredCostPreview && hoverGroundBox && (
+                        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                          Stacking on <span style={mono}>{hoverGroundBox.id}</span>, forecast out in{" "}
+                          <span style={{ ...mono, color: BUCKET_COLOR[hoverGroundBox.bucket] }}>
+                            ~{Math.round(hoverGroundBox.predictedDepartureHour - event.hour)}h
+                          </span>
+                          {hoverGroundBox.predictedDepartureHour <= event.container.predictedDepartureHour && (
+                            <span style={{ color: C.red }}> — that is sooner than this box, so it would get buried.</span>
+                          )}
+                        </div>
+                      )}
+                      {!hoveredCostPreview && hoverIsOpenGround && (
+                        <div style={{ fontSize: 12, color: C.green, lineHeight: 1.5 }}>
+                          Open ground — nothing sits beneath it, so it can never be buried later.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <button onClick={askHint} style={bigBtn(C.accent)}>What would Shipmate do?</button>
